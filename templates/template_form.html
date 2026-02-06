@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{% if template %}Modifier{% else %}Creer{% endif %} Template - SaaS Generator{% endblock %}
+
+{% block content %}
+<header>
+    <h1>{% if template %}Modifier{% else %}Creer{% endif %} un Template</h1>
+    <p class="subtitle">{% if template %}Modifiez votre template{% else %}Creez un nouveau template avec des variables{% endif %}</p>
+    <a href="{{ url_for('views.index') }}" class="btn btn-outline btn-sm">&larr; Retour aux templates</a>
+</header>
+
+<main>
+    <section class="form-section">
+        <div class="form-container">
+            <form id="templateForm">
+                <div class="input-group">
+                    <label for="templateName">Nom du template *</label>
+                    <input type="text" id="templateName" name="name" required maxlength="200"
+                           placeholder="Ex: Generateur de Cahier des Charges SaaS"
+                           {% if template %}value="{{ template.name }}"{% endif %}>
+                </div>
+
+                <div class="input-group">
+                    <label for="templateDescription">Description</label>
+                    <input type="text" id="templateDescription" name="description" maxlength="1000"
+                           placeholder="Description courte du template"
+                           {% if template %}value="{{ template.description or '' }}"{% endif %}>
+                </div>
+
+                <div class="input-group">
+                    <label for="templateContent">Contenu du template *</label>
+                    <textarea id="templateContent" name="content" rows="20" required
+                              maxlength="50000"
+                              placeholder="Votre prompt avec des variables entre accolades, ex: {nom_projet}, {description}, {budget}"
+                    >{% if template %}{{ template.content }}{% endif %}</textarea>
+                    <p class="help-text">
+                        Utilisez le format {variable} pour definir des variables. Ex: {idee}, {budget}, {date}
+                    </p>
+                </div>
+
+                <div class="input-group">
+                    <label for="defaultProvider">Provider par defaut</label>
+                    <select id="defaultProvider" name="default_provider">
+                        {% for pid, pinfo in config.providers.items() %}
+                        <option value="{{ pid }}"
+                            {% if template and template.default_provider == pid %}selected{% endif %}>
+                            {{ pinfo.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="defaultModel">Modele par defaut</label>
+                    <select id="defaultModel" name="default_model">
+                        <option value="">Chargement...</option>
+                    </select>
+                </div>
+
+                <div class="variables-preview" id="variablesPreview" style="display: none;">
+                    <h4>Variables detectees :</h4>
+                    <div id="variablesList" class="variables-list"></div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-large btn-primary">
+                        {% if template %}Mettre a jour{% else %}Creer{% endif %} le template
+                    </button>
+                    <a href="{{ url_for('views.index') }}" class="btn btn-outline">Annuler</a>
+                </div>
+            </form>
+        </div>
+    </section>
+</main>
+
+<footer>
+    <p>SaaS Generator &mdash; Systeme de templates dynamiques</p>
+</footer>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const PAGE_CONFIG = {{ config|tojson }};
+    const TEMPLATE_ID = {% if template %}{{ template.id }}{% else %}null{% endif %};
+    const TEMPLATE_DATA = {% if template %}{{ template.to_dict()|tojson }}{% else %}null{% endif %};
+    document.addEventListener('DOMContentLoaded', () => App.initTemplateForm(PAGE_CONFIG, TEMPLATE_ID, TEMPLATE_DATA));
+</script>
+{% endblock %}

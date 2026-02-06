@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Inscription - SaaS Generator{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h1>Creer un compte</h1>
+        <p class="auth-subtitle">Inscrivez-vous pour commencer</p>
+
+        <form method="POST" action="{{ url_for('auth.register_post') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="input-group">
+                <label for="username">Nom d'utilisateur</label>
+                <input type="text" id="username" name="username" required autofocus
+                       placeholder="min. 3 caracteres" minlength="3" maxlength="80">
+            </div>
+
+            <div class="input-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required
+                       placeholder="votre@email.com">
+            </div>
+
+            <div class="input-group">
+                <label for="password">Mot de passe</label>
+                <input type="password" id="password" name="password" required
+                       placeholder="min. 8 car., 1 maj., 1 min., 1 chiffre" minlength="8">
+            </div>
+
+            <div class="input-group">
+                <label for="password_confirm">Confirmer le mot de passe</label>
+                <input type="password" id="password_confirm" name="password_confirm" required
+                       placeholder="repetez le mot de passe">
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-large">Creer mon compte</button>
+        </form>
+
+        <p class="auth-link">
+            Deja un compte ?
+            <a href="{{ url_for('auth.login') }}">Se connecter</a>
+        </p>
+    </div>
+</div>
+{% endblock %}

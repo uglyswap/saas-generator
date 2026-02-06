@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ template.name }} - SaaS Generator{% endblock %}
+
+{% block content %}
+<header>
+    <h1>{{ template.name }}</h1>
+    <p class="subtitle">{{ template.description or 'Remplissez les variables pour generer votre resultat' }}</p>
+    <a href="{{ url_for('views.index') }}" class="btn btn-outline btn-sm">&larr; Retour aux templates</a>
+</header>
+
+<main>
+    <!-- Provider Config -->
+    <section class="config-section">
+        <button id="toggleConfig" class="config-toggle">
+            <span>Configuration Provider &amp; Modele</span>
+        </button>
+        <div id="configPanel" class="config-panel" style="display: none;">
+            <div class="config-content">
+                <h3>Selection du Provider</h3>
+
+                {% if template.default_provider and template.default_model %}
+                <div class="config-note success">
+                    <strong>Defaults du template "{{ template.name }}"</strong>
+                    <p>
+                        Provider : {{ config.providers[template.default_provider].name if template.default_provider in config.providers else template.default_provider }}<br>
+                        Modele : {{ template.default_model }}
+                    </p>
+                </div>
+                {% endif %}
+
+                <div class="input-group">
+                    <label for="providerSelect">Provider</label>
+                    <select id="providerSelect">
+                        {% for pid, pinfo in config.providers.items() %}
+                        <option value="{{ pid }}"
+                            {% if pid == template.default_provider %}selected{% endif %}>
+                            {{ pinfo.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="modelSelect">Modele</label>
+                    <select id="modelSelect"></select>
+                    <button id="refreshModelsBtn" class="btn btn-sm btn-outline">Rafraichir les modeles</button>
+                </div>
+
+                <div class="input-group">
+                    <label for="apiKeyInput">Cle API</label>
+                    <input type="password" id="apiKeyInput" placeholder="Entrez votre cle API">
+                </div>
+
+                <div class="config-actions">
+                    <button id="saveApiKeyBtn" class="btn btn-primary">Sauvegarder la cle API</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Variables Form -->
+    <section class="form-section">
+        <div class="form-container">
+            <h2>Remplissez les Variables</h2>
+            <p class="help-text" style="margin-bottom: 20px;">
+                Variables detectees : <strong>{{ variables|length }}</strong>
+            </p>
+
+            <form id="generateForm">
+                {% for var in variables %}
+                <div class="input-group">
+                    <label for="var_{{ var }}">{{ var }}</label>
+                    <textarea id="var_{{ var }}" name="{{ var }}" rows="3" required
+                              maxlength="10000"
+                              placeholder="Entrez la valeur pour {{ var }}"></textarea>
+                </div>
+                {% endfor %}
+
+                <div class="generate-actions">
+                    <button type="submit" class="btn btn-large btn-primary" id="generateBtn">
+                        Generer le resultat
+                    </button>
+                    <label class="checkbox-label" style="margin-top: 10px;">
+                        <input type="checkbox" id="streamToggle" checked> Streaming en temps reel
+                    </label>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <!-- Result Modal -->
+    <div id="resultModal" class="modal" style="display: none;">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>Resultat genere</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button id="exportBtn" class="btn btn-secondary">Exporter en Markdown</button>
+                    <button id="closeResultBtn" class="btn btn-outline btn-sm">X</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="streamProgress" class="stream-progress" style="display: none;">
+                    <div class="stream-bar"><div class="stream-bar-fill"></div></div>
+                    <span class="stream-status">Generation en cours...</span>
+                </div>
+                <div id="resultContent" class="result-content markdown"></div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer>
+    <p>SaaS Generator &mdash; Systeme de templates dynamiques</p>
+</footer>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const PAGE_CONFIG = {{ config|tojson }};
+    const TEMPLATE = {{ template.to_dict()|tojson }};
+    const TEMPLATE_ID = {{ template.id }};
+    document.addEventListener('DOMContentLoaded', () => App.initUseTemplate(PAGE_CONFIG, TEMPLATE, TEMPLATE_ID));
+</script>
+{% endblock %}

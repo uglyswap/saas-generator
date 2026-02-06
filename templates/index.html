@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - SaaS Generator{% endblock %}
+
+{% block content %}
+<header>
+    <h1>SaaS Generator</h1>
+    <p class="subtitle">Creez des prompts avec variables et generez des resultats personnalises</p>
+</header>
+
+<main>
+    <!-- Configuration Provider -->
+    <section class="config-section">
+        <button id="toggleConfig" class="config-toggle">
+            <span>Configuration Provider &amp; Modele</span>
+        </button>
+        <div id="configPanel" class="config-panel" style="display: none;">
+            <div class="config-content">
+                <h3>Selection du Provider</h3>
+                <div class="input-group">
+                    <label for="providerSelect">Provider</label>
+                    <select id="providerSelect">
+                        {% for pid, pinfo in config.providers.items() %}
+                        <option value="{{ pid }}" {% if pid == config.selected_provider %}selected{% endif %}>
+                            {{ pinfo.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="modelSelect">Modele</label>
+                    <select id="modelSelect">
+                        <option value="">Chargement...</option>
+                    </select>
+                    <button id="refreshModelsBtn" class="btn btn-sm btn-outline">Rafraichir les modeles</button>
+                </div>
+
+                <div class="input-group">
+                    <label for="apiKeyInput">Cle API</label>
+                    <input type="password" id="apiKeyInput" placeholder="Entrez votre cle API">
+                    <p class="help-text" id="apiKeyHelp">Cle API requise pour generer avec ce provider</p>
+                </div>
+
+                <div class="config-actions">
+                    <button id="saveConfigBtn" class="btn btn-primary">Sauvegarder la configuration</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Actions -->
+    <section class="actions-section">
+        <a href="{{ url_for('views.new_template') }}" class="btn btn-large btn-primary">
+            + Creer un nouveau template
+        </a>
+    </section>
+
+    <!-- Templates List -->
+    <section class="templates-section">
+        <h2>Mes Templates</h2>
+        <div id="templatesList" class="templates-list">
+            {% if templates|length == 0 %}
+            <p class="empty-state">Aucun template cree. Creez votre premier template !</p>
+            {% else %}
+            {% for template in templates %}
+            <div class="template-card" data-id="{{ template.id }}">
+                <div class="template-header">
+                    <h3>{{ template.name }}</h3>
+                    <div class="template-actions">
+                        <a href="{{ url_for('views.use_template', template_id=template.id) }}"
+                           class="btn btn-secondary btn-sm">Utiliser</a>
+                        <a href="{{ url_for('views.edit_template', template_id=template.id) }}"
+                           class="btn btn-outline btn-sm">Modifier</a>
+                        <button class="btn btn-danger btn-sm"
+                                onclick="App.deleteTemplate({{ template.id }})">Supprimer</button>
+                    </div>
+                </div>
+                <p class="template-description">{{ template.description or 'Pas de description' }}</p>
+                <div class="template-meta">
+                    <span class="template-variables">{{ template.variables|length }} variable(s)</span>
+                    <span class="template-date">{{ template.updated_at.strftime('%d/%m/%Y') if template.updated_at else '' }}</span>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- History -->
+    <section class="history-section">
+        <h2>Historique des generations</h2>
+        <div class="history-controls">
+            <div class="history-filters">
+                <input type="text" id="historySearch" placeholder="Rechercher..." class="input-sm">
+                <select id="historyProviderFilter" class="input-sm">
+                    <option value="">Tous les providers</option>
+                    {% for pid, pinfo in config.providers.items() %}
+                    <option value="{{ pid }}">{{ pinfo.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button id="loadHistoryBtn" class="btn btn-secondary btn-sm">Charger l'historique</button>
+        </div>
+        <div id="historyList" class="history-list">
+            <p class="empty-history">Cliquez sur "Charger l'historique" pour voir les generations</p>
+        </div>
+        <div id="historyPagination" class="pagination" style="display: none;"></div>
+    </section>
+
+    <!-- History Modal -->
+    <div id="historyModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Details de la generation</h2>
+                <button class="btn btn-outline btn-sm" onclick="App.closeHistoryModal()">X</button>
+            </div>
+            <div class="modal-body">
+                <div class="history-modal-info">
+                    <p><strong>Template :</strong> <span id="historyTemplateName"></span></p>
+                    <p><strong>Provider :</strong> <span id="historyProvider"></span></p>
+                    <p><strong>Modele :</strong> <span id="historyModel"></span></p>
+                    <p><strong>Date :</strong> <span id="historyDate"></span></p>
+                </div>
+                <div class="history-modal-variables">
+                    <h4>Variables :</h4>
+                    <div id="historyVariables" class="history-variables-list"></div>
+                </div>
+                <div class="history-modal-result">
+                    <h4>Resultat genere :</h4>
+                    <pre id="historyResultContent" class="result-content markdown"></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="exportHistoryBtn" class="btn btn-secondary">Exporter</button>
+                <button class="btn btn-outline" onclick="App.closeHistoryModal()">Fermer</button>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer>
+    <p>SaaS Generator &mdash; Systeme de templates dynamiques</p>
+</footer>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const PAGE_CONFIG = {{ config|tojson }};
+    document.addEventListener('DOMContentLoaded', () => App.initDashboard(PAGE_CONFIG));
+</script>
+{% endblock %}
