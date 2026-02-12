@@ -16,6 +16,10 @@ class User(UserMixin, db.Model):
     email: str = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash: str = db.Column(db.String(255), nullable=False)
     is_admin: bool = db.Column(db.Boolean, default=False)
+    default_provider: str = db.Column(db.String(50), nullable=True)
+    meta_prompt: str = db.Column(db.Text, default='')
+    meta_prompt_provider: str = db.Column(db.String(50), nullable=True)
+    meta_prompt_model: str = db.Column(db.String(100), nullable=True)
     created_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     templates = db.relationship(
@@ -79,6 +83,10 @@ class HistoryEntry(db.Model):
     model: str = db.Column(db.String(100))
     result: str = db.Column(db.Text)
     created_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    edited_at: Optional[datetime] = db.Column(db.DateTime, nullable=True)
+
+    versions = db.relationship('GenerationVersion', backref='history_entry', lazy='dynamic',
+                               cascade='all, delete-orphan', order_by='GenerationVersion.version_number')
 
     def to_dict(self) -> dict:
         return {
@@ -90,10 +98,66 @@ class HistoryEntry(db.Model):
             'model': self.model or '',
             'result': self.result or '',
             'timestamp': self.created_at.isoformat() if self.created_at else None,
+            'edited_at': self.edited_at.isoformat() if self.edited_at else None,
         }
 
     def __repr__(self) -> str:
         return f'<HistoryEntry {self.id}>'
+
+
+class GenerationVersion(db.Model):
+    """Versioned snapshot of a generation result."""
+    __tablename__ = 'generation_versions'
+
+    id: int = db.Column(db.Integer, primary_key=True)
+    history_entry_id: int = db.Column(db.Integer, db.ForeignKey('history_entries.id'), nullable=False, index=True)
+    version_number: int = db.Column(db.Integer, nullable=False)
+    result: str = db.Column(db.Text, nullable=False)
+    created_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('history_entry_id', 'version_number', name='uq_entry_version'),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'history_entry_id': self.history_entry_id,
+            'version_number': self.version_number,
+            'result': self.result or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self) -> str:
+        return f'<GenerationVersion entry={self.history_entry_id} v{self.version_number}>'
+
+
+class ExportTemplate(db.Model):
+    """User-defined branding template for exports."""
+    __tablename__ = 'export_templates'
+
+    id: int = db.Column(db.Integer, primary_key=True)
+    user_id: int = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    name: str = db.Column(db.String(200), nullable=False)
+    header_text: str = db.Column(db.String(500), default='')
+    footer_text: str = db.Column(db.String(500), default='')
+    primary_color: str = db.Column(db.String(20), default='#2563eb')
+    logo_path: Optional[str] = db.Column(db.String(500), nullable=True)
+    created_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'name': self.name,
+            'header_text': self.header_text or '',
+            'footer_text': self.footer_text or '',
+            'primary_color': self.primary_color or '#2563eb',
+            'logo_path': self.logo_path or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self) -> str:
+        return f'<ExportTemplate {self.name}>'
 
 
 class ProviderConfig(db.Model):

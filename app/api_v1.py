@@ -1,10 +1,10 @@
-"""API v1 blueprint - RESTful endpoints for templates, generation, history, config."""
+"""API v1 blueprint - RESTful endpoints for templates, generation, history, config, export, versioning."""
 import logging
 from flask import Blueprint, request, jsonify, Response, current_app
 from flask_login import login_required, current_user
 
 from app import db
-from app.models import ProviderConfig, Template
+from app.models import ProviderConfig, Template, ExportTemplate, User
 from app.utils.security import encrypt_api_key, decrypt_api_key
 from app.utils.validators import (
     validate_api_key,
@@ -25,7 +25,17 @@ from app.services.history_service import (
     get_user_history,
     get_history_entry,
     create_history_entry,
+    update_history_result,
     delete_history_entry,
+    get_entry_versions,
+    get_version,
+    restore_version,
+)
+from app.services.export_service import (
+    export_markdown,
+    export_html,
+    export_pdf,
+    export_docx,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +97,8 @@ def save_config():
         pc.api_key_encrypted = encrypt_api_key(api_key)
     if model_id:
         pc.selected_model = model_id
+        # When saving a model choice, mark this provider as the user's default
+        current_user.default_provider = provider_id
 
     db.session.commit()
     logger.info('Config saved: provider=%s user=%d', provider_id, current_user.id)
@@ -97,6 +109,121 @@ def save_config():
         'has_api_key': bool(pc.api_key_encrypted),
         'selected_model': pc.selected_model,
     })
+
+
+# -----------------------------------------------------------------------
+# Meta-Prompt Configuration (Template Generation AI)
+# -----------------------------------------------------------------------
+
+@api_v1_bp.route('/config/meta-prompt', methods=['GET'])
+@login_required
+def get_meta_prompt_config():
+    """Get meta-prompt configuration for template content generation."""
+    user = db.session.get(User, current_user.id)
+    default_meta = current_app.config.get('DEFAULT_META_PROMPT', '')
+    return jsonify({
+        'meta_prompt': user.meta_prompt or default_meta,
+        'provider': user.meta_prompt_provider or user.default_provider or '',
+        'model': user.meta_prompt_model or '',
+        'is_default': not bool(user.meta_prompt),
+    })
+
+
+@api_v1_bp.route('/config/meta-prompt', methods=['POST'])
+@login_required
+def save_meta_prompt_config():
+    """Save meta-prompt configuration."""
+    data = request.get_json(silent=True) or {}
+
+    meta_prompt = data.get('meta_prompt', '').strip()
+    provider_id = data.get('provider', '').strip()
+    model_id = data.get('model', '').strip()
+
+    if meta_prompt and len(meta_prompt) > 50000:
+        return jsonify({'error': 'Le meta-prompt est trop long (max 50000 caracteres)'}), 400
+
+    if provider_id:
+        providers = current_app.config.get('PROVIDERS', {})
+        ok, err = validate_provider_id(provider_id, providers)
+        if not ok:
+            return jsonify({'error': err}), 400
+
+    user = db.session.get(User, current_user.id)
+    user.meta_prompt = meta_prompt
+    if provider_id:
+        user.meta_prompt_provider = provider_id
+    if model_id:
+        user.meta_prompt_model = model_id
+
+    db.session.commit()
+    logger.info('Meta-prompt config saved: user=%d', current_user.id)
+    return jsonify({'success': True, 'message': 'Configuration du meta-prompt sauvegardee'})
+
+
+@api_v1_bp.route('/generate/template-content', methods=['POST'])
+@login_required
+def generate_template_content():
+    """Generate template content using the meta-prompt and AI."""
+    data = request.get_json(silent=True) or {}
+
+    template_name = data.get('name', '').strip()
+    template_description = data.get('description', '').strip()
+
+    if not template_name:
+        return jsonify({'error': 'Le nom du template est requis'}), 400
+    if not template_description:
+        return jsonify({'error': 'La description du template est requise'}), 400
+
+    # Get meta-prompt config
+    user = db.session.get(User, current_user.id)
+    meta_prompt_text = user.meta_prompt or current_app.config.get('DEFAULT_META_PROMPT', '')
+
+    if not meta_prompt_text:
+        return jsonify({'error': 'Aucun meta-prompt configure'}), 400
+
+    # Determine provider and model
+    provider_id = user.meta_prompt_provider or user.default_provider or ''
+    model_id = user.meta_prompt_model or ''
+
+    if not provider_id:
+        return jsonify({'error': 'Aucun provider configure pour la generation de templates. '
+                       'Configurez-le dans le panneau de configuration (Etape 4).'}), 400
+
+    providers = current_app.config.get('PROVIDERS', {})
+    ok, err = validate_provider_id(provider_id, providers)
+    if not ok:
+        return jsonify({'error': err}), 400
+
+    # Get API key
+    pc = ProviderConfig.query.filter_by(
+        user_id=current_user.id, provider_id=provider_id
+    ).first()
+    if not pc or not pc.api_key_encrypted:
+        return jsonify({
+            'error': f'Cle API manquante pour {providers[provider_id]["name"]}. '
+                     f'Configurez-la dans le panneau de configuration.'
+        }), 400
+
+    # Fallback model
+    if not model_id:
+        model_id = pc.selected_model or providers[provider_id].get('default_model', '')
+    if not model_id:
+        return jsonify({'error': 'Aucun modele configure'}), 400
+
+    api_key = decrypt_api_key(pc.api_key_encrypted)
+
+    # Substitute variables into meta-prompt
+    prompt = safe_substitute(meta_prompt_text, {
+        'nom_template': template_name,
+        'description_template': template_description,
+    })
+
+    # Call LLM (synchronous - template content is short)
+    result, error = call_llm_api(prompt, provider_id, model_id, api_key)
+    if error:
+        return jsonify({'error': error}), 500
+
+    return jsonify({'success': True, 'content': result})
 
 
 # -----------------------------------------------------------------------
@@ -278,48 +405,107 @@ def generate():
 @login_required
 def generate_stream():
     """Generate result with Server-Sent Events streaming."""
+    import json as _json
     data = request.get_json(silent=True) or {}
     ctx, error_resp = _prepare_generation(data)
     if error_resp:
-        return error_resp
+        # Return error as SSE so the client can parse it
+        try:
+            err_data = _json.loads(error_resp[0].get_data(as_text=True))
+            err_msg = err_data.get('error', 'Erreur inconnue')
+        except Exception:
+            err_msg = 'Erreur inconnue'
+        def error_stream():
+            yield f"data: {_json.dumps({'type': 'error', 'message': err_msg}, ensure_ascii=False)}\n\n"
+        return Response(error_stream(), mimetype='text/event-stream')
 
-    tpl = ctx['tpl']
+    tpl_id = ctx['tpl'].id
+    tpl_name = ctx['tpl'].name
     variables = ctx['variables']
     provider_id = ctx['provider_id']
     model_id = ctx['model_id']
     user_id = current_user.id
+    prompt = ctx['prompt']
+    api_key = ctx['api_key']
+    app = current_app._get_current_object()
 
     def event_stream():
-        full_content = ''
-        for event in stream_llm_api(ctx['prompt'], provider_id, model_id, ctx['api_key']):
-            yield event
-            # Capture final content for history
-            if '"type": "done"' in event or '"type":"done"' in event:
-                import json as _json
-                try:
-                    line = event.strip()
-                    if line.startswith('data: '):
-                        payload = _json.loads(line[6:])
-                        full_content = payload.get('content', '')
-                except Exception:
-                    pass
+        with app.app_context():
+            full_content = ''
+            for event in stream_llm_api(prompt, provider_id, model_id, api_key):
+                yield event
+                if '"type": "done"' in event or '"type":"done"' in event:
+                    try:
+                        line = event.strip()
+                        if line.startswith('data: '):
+                            payload = _json.loads(line[6:])
+                            full_content = payload.get('content', '')
+                    except Exception:
+                        pass
 
-        # Save to history after streaming completes
-        if full_content:
-            from app import db as _db
-            entry = create_history_entry(
-                user_id=user_id,
-                template_id=tpl.id,
-                template_name=tpl.name,
-                variables=variables,
-                provider=provider_id,
-                model=model_id,
-                result=full_content,
-            )
-            import json as _json
-            yield f"data: {_json.dumps({'type': 'saved', 'entry_id': entry.id})}\n\n"
+            # Save to history after streaming completes
+            if full_content:
+                entry = create_history_entry(
+                    user_id=user_id,
+                    template_id=tpl_id,
+                    template_name=tpl_name,
+                    variables=variables,
+                    provider=provider_id,
+                    model=model_id,
+                    result=full_content,
+                )
+                yield f"data: {_json.dumps({'type': 'saved', 'entry_id': entry.id})}\n\n"
 
     return Response(event_stream(), mimetype='text/event-stream')
+
+
+# -----------------------------------------------------------------------
+# Partial Regeneration (Phase 4)
+# -----------------------------------------------------------------------
+
+@api_v1_bp.route('/generate/partial', methods=['POST'])
+@login_required
+def generate_partial():
+    """Regenerate a selected section of text."""
+    data = request.get_json(silent=True) or {}
+    selected_text = data.get('selected_text', '').strip()
+    full_context = data.get('full_context', '').strip()
+    template_id = data.get('template_id')
+    provider_id = data.get('provider', '')
+    model_id = data.get('model', '')
+
+    if not selected_text:
+        return jsonify({'error': 'Aucun texte selectionne'}), 400
+    if not provider_id or not model_id:
+        return jsonify({'error': 'Provider et modele requis'}), 400
+
+    providers = current_app.config.get('PROVIDERS', {})
+    ok, err = validate_provider_id(provider_id, providers)
+    if not ok:
+        return jsonify({'error': err}), 400
+
+    pc = ProviderConfig.query.filter_by(
+        user_id=current_user.id, provider_id=provider_id
+    ).first()
+    if not pc or not pc.api_key_encrypted:
+        return jsonify({'error': 'Cle API manquante'}), 400
+
+    api_key = decrypt_api_key(pc.api_key_encrypted)
+
+    prompt = (
+        f"Voici le contexte complet d'un document :\n\n{full_context}\n\n"
+        f"---\n\n"
+        f"Reecris UNIQUEMENT la section suivante, en l'ameliorant tout en gardant "
+        f"le meme style, ton et format que le reste du document. "
+        f"Retourne UNIQUEMENT le texte de remplacement, sans explication :\n\n"
+        f"{selected_text}"
+    )
+
+    result, error = call_llm_api(prompt, provider_id, model_id, api_key)
+    if error:
+        return jsonify({'error': error}), 500
+
+    return jsonify({'success': True, 'replacement': result})
 
 
 # -----------------------------------------------------------------------
@@ -357,6 +543,21 @@ def get_history(entry_id: int):
     return jsonify({'entry': entry.to_dict()})
 
 
+@api_v1_bp.route('/history/<int:entry_id>', methods=['PATCH'])
+@login_required
+def patch_history(entry_id: int):
+    """Update a history entry's result (edit mode)."""
+    data = request.get_json(silent=True) or {}
+    new_result = data.get('result')
+    if new_result is None:
+        return jsonify({'error': 'Champ result requis'}), 400
+
+    entry, err = update_history_result(entry_id, current_user.id, new_result)
+    if err:
+        return jsonify({'error': err}), 404
+    return jsonify({'success': True, 'entry': entry.to_dict()})
+
+
 @api_v1_bp.route('/history/<int:entry_id>', methods=['DELETE'])
 @login_required
 def delete_history(entry_id: int):
@@ -367,19 +568,155 @@ def delete_history(entry_id: int):
     return jsonify({'success': True, 'message': 'Entree supprimee'})
 
 
+# -----------------------------------------------------------------------
+# Versioning (Phase 6)
+# -----------------------------------------------------------------------
+
+@api_v1_bp.route('/history/<int:entry_id>/versions', methods=['GET'])
+@login_required
+def list_versions(entry_id: int):
+    """List all versions for a history entry."""
+    versions = get_entry_versions(entry_id, current_user.id)
+    if versions is None:
+        return jsonify({'error': 'Entree non trouvee'}), 404
+    return jsonify({'versions': versions})
+
+
+@api_v1_bp.route('/history/<int:entry_id>/versions/<int:version_num>', methods=['GET'])
+@login_required
+def get_version_api(entry_id: int, version_num: int):
+    """Get a specific version."""
+    version = get_version(entry_id, current_user.id, version_num)
+    if version is None:
+        return jsonify({'error': 'Version non trouvee'}), 404
+    return jsonify({'version': version})
+
+
+@api_v1_bp.route('/history/<int:entry_id>/versions/<int:version_num>/restore', methods=['POST'])
+@login_required
+def restore_version_api(entry_id: int, version_num: int):
+    """Restore a specific version."""
+    result, err = restore_version(entry_id, current_user.id, version_num)
+    if err:
+        return jsonify({'error': err}), 404
+    return jsonify({'success': True, 'result': result})
+
+
+# -----------------------------------------------------------------------
+# Export (Phase 2 - Multi-format)
+# -----------------------------------------------------------------------
+
 @api_v1_bp.route('/export/<int:entry_id>', methods=['GET'])
 @login_required
 def export_entry(entry_id: int):
-    """Export a history entry as markdown file download."""
+    """Export a history entry in various formats (md, html, docx, pdf)."""
     entry = get_history_entry(entry_id, current_user.id)
     if not entry:
         return jsonify({'error': 'Entree non trouvee'}), 404
 
-    filename = f'generation_{entry.id}.md'
-    content = entry.result or ''
+    fmt = request.args.get('format', 'md').lower()
+    title = entry.template_name or 'Export'
+    raw = entry.result or ''
+
+    # Check if a branding template is specified
+    template_id = request.args.get('template_id', None, type=int)
+    header_text = ''
+    footer_text = ''
+    primary_color = '#2563eb'
+
+    if template_id:
+        export_tpl = ExportTemplate.query.filter_by(
+            id=template_id, user_id=current_user.id
+        ).first()
+        if export_tpl:
+            header_text = export_tpl.header_text or ''
+            footer_text = export_tpl.footer_text or ''
+            primary_color = export_tpl.primary_color or '#2563eb'
+
+    try:
+        if fmt == 'html':
+            content, filename, mimetype = export_html(raw, title, header_text, footer_text, primary_color)
+        elif fmt == 'pdf':
+            content, filename, mimetype = export_pdf(raw, title, header_text, footer_text, primary_color)
+        elif fmt == 'docx':
+            content, filename, mimetype = export_docx(raw, title, header_text, footer_text, primary_color)
+        else:  # md
+            content, filename, mimetype = export_markdown(raw, title)
+    except Exception as e:
+        logger.error('Export failed: %s', e)
+        return jsonify({'error': f'Erreur lors de l\'export: {str(e)}'}), 500
 
     return Response(
         content,
-        mimetype='text/markdown; charset=utf-8',
+        mimetype=mimetype,
         headers={'Content-Disposition': f'attachment; filename="{filename}"'},
     )
+
+
+# -----------------------------------------------------------------------
+# Export Templates / Branding (Phase 5)
+# -----------------------------------------------------------------------
+
+@api_v1_bp.route('/export-templates', methods=['GET'])
+@login_required
+def list_export_templates():
+    """List all export templates for current user."""
+    templates = ExportTemplate.query.filter_by(user_id=current_user.id).order_by(
+        ExportTemplate.created_at.desc()
+    ).all()
+    return jsonify({'templates': [t.to_dict() for t in templates]})
+
+
+@api_v1_bp.route('/export-templates', methods=['POST'])
+@login_required
+def create_export_template():
+    """Create a new export template."""
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Nom requis'}), 400
+
+    tpl = ExportTemplate(
+        user_id=current_user.id,
+        name=name,
+        header_text=data.get('header_text', '').strip(),
+        footer_text=data.get('footer_text', '').strip(),
+        primary_color=data.get('primary_color', '#2563eb').strip(),
+    )
+    db.session.add(tpl)
+    db.session.commit()
+    return jsonify({'success': True, 'template': tpl.to_dict()}), 201
+
+
+@api_v1_bp.route('/export-templates/<int:tpl_id>', methods=['PUT'])
+@login_required
+def update_export_template(tpl_id: int):
+    """Update an export template."""
+    tpl = ExportTemplate.query.filter_by(id=tpl_id, user_id=current_user.id).first()
+    if not tpl:
+        return jsonify({'error': 'Template non trouve'}), 404
+
+    data = request.get_json(silent=True) or {}
+    if 'name' in data:
+        tpl.name = data['name'].strip()
+    if 'header_text' in data:
+        tpl.header_text = data['header_text'].strip()
+    if 'footer_text' in data:
+        tpl.footer_text = data['footer_text'].strip()
+    if 'primary_color' in data:
+        tpl.primary_color = data['primary_color'].strip()
+
+    db.session.commit()
+    return jsonify({'success': True, 'template': tpl.to_dict()})
+
+
+@api_v1_bp.route('/export-templates/<int:tpl_id>', methods=['DELETE'])
+@login_required
+def delete_export_template(tpl_id: int):
+    """Delete an export template."""
+    tpl = ExportTemplate.query.filter_by(id=tpl_id, user_id=current_user.id).first()
+    if not tpl:
+        return jsonify({'error': 'Template non trouve'}), 404
+    db.session.delete(tpl)
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'Template supprime'})

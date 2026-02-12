@@ -1,210 +1,238 @@
-# 🚀 Générateur de Cahier des Charges SaaS
+# SaaS Generator
 
-Application Flask qui transforme vos idées de SaaS en cahiers des charges complets et professionnels grâce à l'API Z.AI GLM 4.7.
+Application Flask pour generer du contenu avec des templates de prompts personnalises, propulsee par des modeles LLM (Z.AI GLM, OpenRouter).
 
-## ✨ Fonctionnalités
+## Fonctionnalites
 
-- 🎯 **Génération automatique** de cahiers des charges complets à partir d'une simple idée
-- 📝 **Template SaaS spécialisé** créé par des experts Product Manager et Architecte Logiciel
-- 📥 **Export Markdown** pour une intégration facile dans vos workflows
-- 📚 **Historique local** de toutes vos générations
-- ⚙️ **Configuration API flexible** via l'interface web
-- 🎨 **Interface moderne et responsive**
-- 🖥️ **Exécutable standalone** grâce à PyInstaller
+### Gestion des Templates
+- Creation, modification et suppression de templates de prompts
+- Variables dynamiques avec syntaxe `{variable_name}`
+- Association d'un provider et modele par defaut par template
+- Generation automatique de contenu de template via IA (meta-prompt)
 
-## 📋 Prérequis
+### Generation de Contenu
+- Appels synchrones et en streaming (Server-Sent Events)
+- Support multi-provider (Z.AI Coding Plan, OpenRouter)
+- Regeneration partielle de sections selectionnees
+- Historique complet des generations avec pagination
 
-- Python 3.8 ou supérieur
-- pip (gestionnaire de paquets Python)
+### Versioning
+- Sauvegarde automatique des versions a chaque modification
+- Restauration d'une version precedente
+- Historique des changements
 
-## 🚀 Installation
+### Export Multi-format
+- Markdown (.md)
+- HTML
+- PDF
+- DOCX (Word)
+- Templates de branding personnalises (header, footer, couleurs)
 
-### Option 1: Utiliser l'exécutable (Recommandé)
+### Securite
+- Authentification utilisateur (inscription, connexion)
+- Chiffrement AES des cles API
+- Protection CSRF
+- Validation des entrees
 
-1. Téléchargez l'exécutable `SaaSGenerator.exe`
-2. Double-cliquez pour lancer l'application
-3. Ouvrez votre navigateur sur `http://localhost:5000`
+### Interface
+- Mode sombre / clair
+- Interface responsive
+- Rafraichissement dynamique des modeles disponibles
 
-### Option 2: Installation depuis le code source
+## Providers Supportes
 
-1. Clonez ou téléchargez ce repository
+| Provider | Endpoint | Modeles |
+|----------|----------|---------|
+| Z.AI Coding Plan | `https://api.z.ai/api/coding/paas/v4/` | GLM-4.7, GLM-5, GLM-4.6, GLM-4.5 |
+| OpenRouter | `https://openrouter.ai/api/v1/` | Claude, GPT, Gemini, etc. |
+
+## Installation
+
+### Prerequis
+- Python 3.11+
+- pip
+
+### Installation locale
 
 ```bash
+# Cloner le repository
+git clone https://github.com/votre-username/saas-generator.git
 cd saas-generator
-```
 
-2. Créez un environnement virtuel (recommandé)
-
-```bash
+# Creer un environnement virtuel
 python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 
-# Windows
-venv\Scripts\activate
-
-# Mac/Linux
-source venv/bin/activate
-```
-
-3. Installez les dépendances
-
-```bash
+# Installer les dependances
 pip install -r requirements.txt
-```
 
-4. (Optionnel) Configurez votre clé API
-
-Créez un fichier `.env` à la racine du projet :
-
-```bash
+# Configurer les variables d'environnement
 cp .env.example .env
+# Editer .env avec vos valeurs
+
+# Lancer l'application
+python run.py
 ```
 
-Éditez `.env` et ajoutez votre clé API Z.AI :
+L'application sera accessible sur `http://localhost:5000`
 
-```
-ZAI_API_KEY=votre_clé_api_ici
-```
-
-5. Lancez l'application
+### Docker
 
 ```bash
-python app.py
+# Build
+docker build -t saas-generator .
+
+# Run avec SQLite
+docker run -p 5000:5000 -e SECRET_KEY=votre-cle-secrete saas-generator
+
+# Ou avec docker-compose (inclut PostgreSQL)
+docker-compose up -d
 ```
 
-6. Ouvrez votre navigateur sur `http://localhost:5000`
+## Configuration
 
-## 📖 Utilisation
+### Variables d'environnement
 
-### 1. Configuration de la clé API
+| Variable | Description | Defaut |
+|----------|-------------|--------|
+| `SECRET_KEY` | Cle secrete Flask | `dev-change-me-in-production` |
+| `DATABASE_URL` | URL de connexion BD | `sqlite:///saas_generator.db` |
+| `FLASK_ENV` | Environnement | `production` |
+| `ENCRYPTION_KEY` | Cle de chiffrement AES (32 chars) | - |
 
-- Cliquez sur "⚙️ Configuration API"
-- Entrez votre clé API Z.AI
-- Cliquez sur "Sauvegarder"
+### Fichier .env exemple
 
-> **Note** : Une clé API par défaut est fournie, mais il est recommandé d'utiliser votre propre clé pour une meilleure sécurité.
-
-### 2. Générer un cahier des charges
-
-1. Dans le formulaire, entrez votre idée de SaaS
-2. Exemple : *"Une plateforme de gestion de projets pour équipes marketing avec intégration Slack et Notion"*
-3. Cliquez sur "Générer le cahier des charges"
-4. Attendez quelques secondes (la génération peut prendre 10-30 secondes)
-5. Le résultat s'affiche automatiquement
-
-### 3. Exporter le résultat
-
-- Cliquez sur "📥 Exporter en Markdown" pour télécharger le fichier
-- Le fichier est sauvegardé dans le dossier `exports/`
-
-### 4. Gérer l'historique
-
-- **Voir** : Cliquez sur "👁️ Voir" pour afficher une génération précédente
-- **Exporter** : Cliquez sur "📥 Exporter" pour télécharger une génération spécifique
-- **Supprimer** : Cliquez sur "🗑️ Supprimer" pour retirer une entrée de l'historique
-
-## 🏗️ Créer l'exécutable
-
-Si vous souhaitez créer votre propre exécutable :
-
-1. Installez PyInstaller
-
-```bash
-pip install pyinstaller
+```env
+SECRET_KEY=votre-cle-secrete-tres-longue
+DATABASE_URL=postgresql://user:pass@localhost/saas_generator
+FLASK_ENV=production
+ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
 ```
 
-2. Générez l'exécutable
-
-```bash
-pyinstaller saas-generator.spec
-```
-
-3. L'exécutable sera créé dans le dossier `dist/`
-
-## 📂 Structure du projet
+## Structure du Projet
 
 ```
 saas-generator/
-├── app.py                 # Application Flask principale
-├── requirements.txt       # Dépendances Python
-├── .env.example          # Exemple de configuration
-├── saas-generator.spec   # Configuration PyInstaller
-├── templates/
-│   └── index.html        # Page principale
+├── app/
+│   ├── __init__.py          # Factory Flask
+│   ├── api_v1.py            # Endpoints API REST
+│   ├── auth.py              # Authentification
+│   ├── models.py            # Modeles SQLAlchemy
+│   ├── views.py             # Routes web
+│   ├── services/
+│   │   ├── llm_service.py   # Appels LLM
+│   │   ├── template_service.py
+│   │   ├── history_service.py
+│   │   └── export_service.py
+│   └── utils/
+│       ├── security.py      # Chiffrement, hash
+│       └── validators.py    # Validation entrees
+├── templates/               # Templates Jinja2
 ├── static/
 │   ├── css/
-│   │   └── style.css     # Styles CSS
 │   └── js/
-│       └── main.js       # JavaScript client
-├── exports/              # Fichiers exportés (créé automatiquement)
-├── history.json          # Historique local (créé automatiquement)
-└── api_config.json       # Configuration API (créé automatiquement)
+├── tests/                   # Tests pytest
+├── config.py                # Configuration Flask
+├── run.py                   # Point d'entree
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
 ```
 
-## 🔧 Dépannage
+## API Endpoints
 
-### L'application ne démarre pas
+### Authentification
+- `POST /auth/register` - Inscription
+- `POST /auth/login` - Connexion
+- `GET /auth/logout` - Deconnexion
 
-- Vérifiez que Python 3.8+ est installé : `python --version`
-- Vérifiez que toutes les dépendances sont installées : `pip list`
-- Essayez de réinstaller les dépendances : `pip install -r requirements.txt --force-reinstall`
+### Configuration
+- `GET /api/v1/config` - Configuration utilisateur
+- `POST /api/v1/config` - Sauvegarder config provider
+- `GET /api/v1/config/meta-prompt` - Config meta-prompt
+- `POST /api/v1/config/meta-prompt` - Sauvegarder meta-prompt
 
-### Erreur de connexion API
+### Templates
+- `GET /api/v1/templates` - Lister templates
+- `POST /api/v1/templates` - Creer template
+- `PUT /api/v1/templates/<id>` - Modifier template
+- `DELETE /api/v1/templates/<id>` - Supprimer template
 
-- Vérifiez que votre clé API est correcte
-- Vérifiez votre connexion internet
-- Consultez la documentation Z.AI : https://docs.z.ai/api-reference/llm/chat-completion
+### Generation
+- `POST /api/v1/generate` - Generation synchrone
+- `POST /api/v1/generate/stream` - Generation streaming (SSE)
+- `POST /api/v1/generate/partial` - Regeneration partielle
+- `POST /api/v1/generate/template-content` - Generer contenu template
 
-### L'historique ne s'affiche pas
+### Historique
+- `GET /api/v1/history` - Lister historique (pagine)
+- `GET /api/v1/history/<id>` - Detail entree
+- `PATCH /api/v1/history/<id>` - Modifier resultat
+- `DELETE /api/v1/history/<id>` - Supprimer entree
 
-- Vérifiez que le fichier `history.json` existe dans le dossier du projet
-- Vérifiez les permissions d'écriture sur le dossier
+### Versioning
+- `GET /api/v1/history/<id>/versions` - Lister versions
+- `GET /api/v1/history/<id>/versions/<num>` - Detail version
+- `POST /api/v1/history/<id>/versions/<num>/restore` - Restaurer
 
-### L'export ne fonctionne pas
+### Export
+- `GET /api/v1/export/<id>?format=md|html|pdf|docx` - Exporter
+- `GET /api/v1/export-templates` - Lister templates branding
+- `POST /api/v1/export-templates` - Creer template branding
+- `PUT /api/v1/export-templates/<id>` - Modifier
+- `DELETE /api/v1/export-templates/<id>` - Supprimer
 
-- Vérifiez que le dossier `exports/` existe et a les permissions d'écriture
-- Vérifiez que votre navigateur autorise les téléchargements
+### Providers
+- `GET /api/v1/providers/<id>/models` - Modeles caches
+- `POST /api/v1/providers/<id>/refresh` - Rafraichir modeles
 
-## 📝 Format du cahier des charges généré
+## Tests
 
-Chaque cahier des charges inclut 9 sections complètes :
+```bash
+# Installer les dependances de test
+pip install pytest pytest-flask
 
-1. **Contexte marché & positionnement** - Problème, marché, USP, pricing
-2. **Personas & parcours critiques** - Profils utilisateurs, flows UX
-3. **Fonctionnalités MVP (MoSCoW)** - Features prioritaires avec user stories
-4. **Architecture données & multi-tenant** - ERD, relations, RLS
-5. **API contracts & intégrations** - Endpoints, webhooks, intégrations
-6. **Stack technique adaptée** - Frontend, backend, auth, deploy
-7. **Non-fonctionnels (SLA)** - Performance, scale, uptime, security
-8. **Roadmap & métriques succès** - MVP, KPIs, objectifs
-9. **Risques & go/live checklist** - Mitigations, checklist de lancement
+# Lancer les tests
+pytest
 
-## 🔐 Sécurité
+# Avec couverture
+pytest --cov=app
+```
 
-- La clé API est sauvegardée localement dans `api_config.json`
-- N'ajoutez jamais `api_config.json` ou `.env` à un repository public
-- Utilisez toujours votre propre clé API en production
+## Deploiement en Production
 
-## 🤝 Contribution
+### Avec Gunicorn
 
-Ce projet est open-source. Les contributions sont les bienvenues !
+```bash
+pip install gunicorn
+gunicorn -w 4 -b 0.0.0.0:5000 "app:create_app('production')"
+```
 
-## 📄 Licence
+### Avec Docker Compose
 
-MIT License
+```bash
+# Configurer les variables
+echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
 
-## 🙏 Remerciements
+# Lancer
+docker-compose up -d
+```
 
-- Propulsé par [Z.AI GLM 4.7](https://docs.z.ai/)
-- Framework web : [Flask](https://flask.palletsprojects.com/)
-- Création d'exécutable : [PyInstaller](https://www.pyinstaller.org/)
+### Checklist Production
 
-## 📞 Support
+- [ ] Definir `SECRET_KEY` securise
+- [ ] Utiliser PostgreSQL (pas SQLite)
+- [ ] Configurer HTTPS
+- [ ] Definir `ENCRYPTION_KEY` pour les cles API
+- [ ] Configurer les sauvegardes DB
+- [ ] Limiter les logs sensibles
 
-Pour toute question ou problème :
-- Consultez la section Dépannage
-- Ouvrez une issue sur GitHub
-- Contactez l'équipe de support
+## Licence
 
----
+MIT
 
-**Bon développement SaaS ! 🚀**
+## Contributions
+
+Les contributions sont les bienvenues! Ouvrez une issue ou une pull request.

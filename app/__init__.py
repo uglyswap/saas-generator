@@ -4,10 +4,10 @@ import logging
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -96,12 +96,46 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     app.register_blueprint(views_bp)
     app.register_blueprint(api_v1_bp, url_prefix='/api/v1')
 
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        """Return JSON for CSRF errors on API calls."""
+        return jsonify({'error': 'Session expiree. Rafraichissez la page (F5).'}), 400
+
     # -------------------------------------------------------------------
     # Database initialisation
     # -------------------------------------------------------------------
     with app.app_context():
         db.create_all()
         os.makedirs(os.path.join(basedir, 'exports'), exist_ok=True)
+
+        # Auto-migrate: add edited_at column if missing
+        from sqlalchemy import inspect as sa_inspect, text
+        inspector = sa_inspect(db.engine)
+        if 'history_entries' in inspector.get_table_names():
+            columns = [c['name'] for c in inspector.get_columns('history_entries')]
+            if 'edited_at' not in columns:
+                db.session.execute(text('ALTER TABLE history_entries ADD COLUMN edited_at DATETIME'))
+                db.session.commit()
+                app.logger.info('Migration: added edited_at column to history_entries')
+
+        # Auto-migrate: add default_provider column to users if missing
+        if 'users' in inspector.get_table_names():
+            user_columns = [c['name'] for c in inspector.get_columns('users')]
+            if 'default_provider' not in user_columns:
+                db.session.execute(text('ALTER TABLE users ADD COLUMN default_provider VARCHAR(50)'))
+                db.session.commit()
+                app.logger.info('Migration: added default_provider column to users')
+
+            # Auto-migrate: add meta_prompt columns to users if missing
+            for col_name, col_type in [
+                ('meta_prompt', 'TEXT'),
+                ('meta_prompt_provider', 'VARCHAR(50)'),
+                ('meta_prompt_model', 'VARCHAR(100)'),
+            ]:
+                if col_name not in user_columns:
+                    db.session.execute(text(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}'))
+                    db.session.commit()
+                    app.logger.info('Migration: added %s column to users', col_name)
 
     app.logger.info('SaaS Generator started (%s mode)', config_name)
     return app

@@ -1,146 +1,307 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - SaaS Generator{% endblock %}
+{% block title %}Dashboard - AI Tool Builder{% endblock %}
 
 {% block content %}
-<header>
-    <h1>SaaS Generator</h1>
-    <p class="subtitle">Creez des prompts avec variables et generez des resultats personnalises</p>
-</header>
+<!-- Configuration -->
+<section class="mb-8">
+    <button id="toggleConfig" class="w-full flex items-center justify-between px-5 py-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700 transition-all group">
+        <div class="flex items-center gap-2">
+            <i data-lucide="settings" class="w-4 h-4 text-slate-400"></i>
+            <span>Configuration</span>
+        </div>
+        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transition-transform group-hover:text-slate-600"></i>
+    </button>
+    <div id="configPanel" class="mt-3 space-y-4" style="display: none;">
 
-<main>
-    <!-- Configuration Provider -->
-    <section class="config-section">
-        <button id="toggleConfig" class="config-toggle">
-            <span>Configuration Provider &amp; Modele</span>
-        </button>
-        <div id="configPanel" class="config-panel" style="display: none;">
-            <div class="config-content">
-                <h3>Selection du Provider</h3>
-                <div class="input-group">
-                    <label for="providerSelect">Provider</label>
-                    <select id="providerSelect">
+        <!-- Step 1: API Keys -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1 flex items-center gap-2">
+                <span class="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-bold">1</span>
+                Cles API
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 ml-7">Enregistrez vos cles pour activer les providers</p>
+            <div class="space-y-3">
+                {% for pid, pinfo in config.providers.items() %}
+                <div class="flex items-center gap-3 flex-wrap" data-provider="{{ pid }}">
+                    <span class="min-w-[120px] text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                        {{ pinfo.name }}
+                        {% if pinfo.has_api_key %}
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">OK</span>
+                        {% else %}
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">Manquante</span>
+                        {% endif %}
+                    </span>
+                    <input type="password" id="apiKey_{{ pid }}" class="config-key-input flex-1 min-w-[180px] px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                           placeholder="{% if pinfo.has_api_key %}Laisser vide pour garder la cle actuelle{% else %}Entrez votre cle API{% endif %}">
+                    <button class="save-api-key-btn inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors" data-provider="{{ pid }}">
+                        <i data-lucide="save" class="w-3.5 h-3.5"></i> Sauvegarder
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Step 2: Provider & Model -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1 flex items-center gap-2">
+                <span class="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-bold">2</span>
+                Provider &amp; Modele par defaut
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 ml-7">Choisissez le provider et le modele par defaut</p>
+            <div class="flex items-end gap-3 flex-wrap">
+                <div class="flex-1 min-w-[180px]">
+                    <label for="defaultProviderSelect" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Provider</label>
+                    <select id="defaultProviderSelect" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         {% for pid, pinfo in config.providers.items() %}
-                        <option value="{{ pid }}" {% if pid == config.selected_provider %}selected{% endif %}>
-                            {{ pinfo.name }}
+                        <option value="{{ pid }}" {% if pid == config.selected_provider %}selected{% endif %}
+                            {% if not pinfo.has_api_key %}disabled{% endif %}>
+                            {{ pinfo.name }}{% if not pinfo.has_api_key %} (cle manquante){% endif %}
                         </option>
                         {% endfor %}
                     </select>
                 </div>
-
-                <div class="input-group">
-                    <label for="modelSelect">Modele</label>
-                    <select id="modelSelect">
+                <div class="flex-1 min-w-[180px]">
+                    <label for="defaultModelSelect" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Modele</label>
+                    <select id="defaultModelSelect" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         <option value="">Chargement...</option>
                     </select>
-                    <button id="refreshModelsBtn" class="btn btn-sm btn-outline">Rafraichir les modeles</button>
                 </div>
-
-                <div class="input-group">
-                    <label for="apiKeyInput">Cle API</label>
-                    <input type="password" id="apiKeyInput" placeholder="Entrez votre cle API">
-                    <p class="help-text" id="apiKeyHelp">Cle API requise pour generer avec ce provider</p>
-                </div>
-
-                <div class="config-actions">
-                    <button id="saveConfigBtn" class="btn btn-primary">Sauvegarder la configuration</button>
-                </div>
+                <button id="refreshDefaultModelsBtn" class="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Rafraichir
+                </button>
+                <button id="saveDefaultBtn" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors">
+                    <i data-lucide="save" class="w-3.5 h-3.5"></i> Sauvegarder
+                </button>
             </div>
         </div>
-    </section>
 
-    <!-- Actions -->
-    <section class="actions-section">
-        <a href="{{ url_for('views.new_template') }}" class="btn btn-large btn-primary">
-            + Creer un nouveau template
-        </a>
-    </section>
-
-    <!-- Templates List -->
-    <section class="templates-section">
-        <h2>Mes Templates</h2>
-        <div id="templatesList" class="templates-list">
-            {% if templates|length == 0 %}
-            <p class="empty-state">Aucun template cree. Creez votre premier template !</p>
-            {% else %}
-            {% for template in templates %}
-            <div class="template-card" data-id="{{ template.id }}">
-                <div class="template-header">
-                    <h3>{{ template.name }}</h3>
-                    <div class="template-actions">
-                        <a href="{{ url_for('views.use_template', template_id=template.id) }}"
-                           class="btn btn-secondary btn-sm">Utiliser</a>
-                        <a href="{{ url_for('views.edit_template', template_id=template.id) }}"
-                           class="btn btn-outline btn-sm">Modifier</a>
-                        <button class="btn btn-danger btn-sm"
-                                onclick="App.deleteTemplate({{ template.id }})">Supprimer</button>
+        <!-- Step 3: Branding -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1 flex items-center gap-2">
+                <span class="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-bold">3</span>
+                Branding des exports
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 ml-7">Personnalisez l'apparence de vos exports</p>
+            <input type="hidden" id="brandingEditId" value="">
+            <div class="space-y-3">
+                <div>
+                    <label for="brandingName" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Nom du template</label>
+                    <input type="text" id="brandingName" placeholder="Ex: Mon entreprise"
+                           class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label for="brandingHeader" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Texte d'en-tete</label>
+                        <input type="text" id="brandingHeader" placeholder="Ex: Rapport genere par MonApp"
+                               class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label for="brandingFooter" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Texte de pied de page</label>
+                        <input type="text" id="brandingFooter" placeholder="Ex: Confidentiel - (c) 2024"
+                               class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label for="brandingColor" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Couleur</label>
+                        <input type="color" id="brandingColor" value="#2563eb"
+                               class="w-full h-[38px] px-1 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg cursor-pointer">
                     </div>
                 </div>
-                <p class="template-description">{{ template.description or 'Pas de description' }}</p>
-                <div class="template-meta">
-                    <span class="template-variables">{{ template.variables|length }} variable(s)</span>
-                    <span class="template-date">{{ template.updated_at.strftime('%d/%m/%Y') if template.updated_at else '' }}</span>
-                </div>
+                <button id="saveBrandingBtn" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors">
+                    <i data-lucide="save" class="w-3.5 h-3.5"></i> Sauvegarder le branding
+                </button>
             </div>
-            {% endfor %}
-            {% endif %}
+            <div id="brandingList" class="mt-4 space-y-2"></div>
         </div>
-    </section>
 
-    <!-- History -->
-    <section class="history-section">
-        <h2>Historique des generations</h2>
-        <div class="history-controls">
-            <div class="history-filters">
-                <input type="text" id="historySearch" placeholder="Rechercher..." class="input-sm">
-                <select id="historyProviderFilter" class="input-sm">
-                    <option value="">Tous les providers</option>
-                    {% for pid, pinfo in config.providers.items() %}
-                    <option value="{{ pid }}">{{ pinfo.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <button id="loadHistoryBtn" class="btn btn-secondary btn-sm">Charger l'historique</button>
-        </div>
-        <div id="historyList" class="history-list">
-            <p class="empty-history">Cliquez sur "Charger l'historique" pour voir les generations</p>
-        </div>
-        <div id="historyPagination" class="pagination" style="display: none;"></div>
-    </section>
-
-    <!-- History Modal -->
-    <div id="historyModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Details de la generation</h2>
-                <button class="btn btn-outline btn-sm" onclick="App.closeHistoryModal()">X</button>
-            </div>
-            <div class="modal-body">
-                <div class="history-modal-info">
-                    <p><strong>Template :</strong> <span id="historyTemplateName"></span></p>
-                    <p><strong>Provider :</strong> <span id="historyProvider"></span></p>
-                    <p><strong>Modele :</strong> <span id="historyModel"></span></p>
-                    <p><strong>Date :</strong> <span id="historyDate"></span></p>
+        <!-- Step 4: Meta-prompt for template generation -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1 flex items-center gap-2">
+                <span class="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-bold">4</span>
+                Generation IA de templates
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 ml-7">Configurez le meta-prompt et le modele utilises par la baguette magique</p>
+            <div class="space-y-3">
+                <div>
+                    <label for="metaPromptText" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Meta-prompt</label>
+                    <textarea id="metaPromptText" rows="8" placeholder="Le prompt utilise pour generer le contenu des templates..."
+                              class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y"></textarea>
+                    <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Variables disponibles : <code class="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-violet-600 dark:text-violet-400">{nom_template}</code> et <code class="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-violet-600 dark:text-violet-400">{description_template}</code></p>
                 </div>
-                <div class="history-modal-variables">
-                    <h4>Variables :</h4>
-                    <div id="historyVariables" class="history-variables-list"></div>
+                <div class="flex items-end gap-3 flex-wrap">
+                    <div class="flex-1 min-w-[180px]">
+                        <label for="metaPromptProvider" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Provider</label>
+                        <select id="metaPromptProvider" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            {% for pid, pinfo in config.providers.items() %}
+                            <option value="{{ pid }}" {% if not pinfo.has_api_key %}disabled{% endif %}>
+                                {{ pinfo.name }}{% if not pinfo.has_api_key %} (cle manquante){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="flex-1 min-w-[180px]">
+                        <label for="metaPromptModel" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Modele</label>
+                        <select id="metaPromptModel" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="">Chargement...</option>
+                        </select>
+                    </div>
+                    <button id="refreshMetaModelsBtn" class="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Rafraichir
+                    </button>
+                    <button id="saveMetaPromptBtn" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors">
+                        <i data-lucide="save" class="w-3.5 h-3.5"></i> Sauvegarder
+                    </button>
                 </div>
-                <div class="history-modal-result">
-                    <h4>Resultat genere :</h4>
-                    <pre id="historyResultContent" class="result-content markdown"></pre>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button id="exportHistoryBtn" class="btn btn-secondary">Exporter</button>
-                <button class="btn btn-outline" onclick="App.closeHistoryModal()">Fermer</button>
             </div>
         </div>
     </div>
-</main>
+</section>
 
-<footer>
-    <p>SaaS Generator &mdash; Systeme de templates dynamiques</p>
+<!-- Create button -->
+<div class="mb-8 text-center">
+    <a href="{{ url_for('views.new_template') }}" class="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm">
+        <i data-lucide="plus" class="w-4 h-4"></i>
+        Creer un nouveau template
+    </a>
+</div>
+
+<!-- Templates Grid -->
+<section class="mb-10">
+    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+        <i data-lucide="layout-template" class="w-5 h-5 text-slate-400"></i>
+        Mes Templates
+    </h2>
+    <div id="templatesList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% if templates|length == 0 %}
+        <div class="col-span-full flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
+            <i data-lucide="file-text" class="w-12 h-12 mb-3 opacity-50"></i>
+            <p class="text-sm">Aucun template cree. Creez votre premier template !</p>
+        </div>
+        {% else %}
+        {% for template in templates %}
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all group" data-id="{{ template.id }}">
+            <div class="flex items-start justify-between gap-3 mb-3">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100 line-clamp-2">{{ template.name }}</h3>
+            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 line-clamp-2">{{ template.description or 'Pas de description' }}</p>
+            <div class="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500 mb-4">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded">
+                    <i data-lucide="braces" class="w-3 h-3"></i> {{ template.variables|length }} var.
+                </span>
+                <span>{{ template.updated_at.strftime('%d/%m/%Y') if template.updated_at else '' }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <a href="{{ url_for('views.use_template', template_id=template.id) }}"
+                   class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors">
+                    <i data-lucide="rocket" class="w-3.5 h-3.5"></i> Utiliser
+                </a>
+                <a href="{{ url_for('views.edit_template', template_id=template.id) }}"
+                   class="inline-flex items-center justify-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                    <i data-lucide="edit-2" class="w-3.5 h-3.5"></i>
+                </a>
+                <button onclick="App.deleteTemplate({{ template.id }})"
+                        class="inline-flex items-center justify-center gap-1.5 px-3 py-2 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 rounded-lg text-xs font-medium hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+</section>
+
+<!-- History -->
+<section class="mb-10">
+    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+        <i data-lucide="history" class="w-5 h-5 text-slate-400"></i>
+        Historique des generations
+    </h2>
+    <div class="flex items-center gap-3 mb-4 flex-wrap">
+        <div class="flex-1 min-w-[150px]">
+            <input type="text" id="historySearch" placeholder="Rechercher..."
+                   class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        </div>
+        <select id="historyProviderFilter" class="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <option value="">Tous les providers</option>
+            {% for pid, pinfo in config.providers.items() %}
+            <option value="{{ pid }}">{{ pinfo.name }}</option>
+            {% endfor %}
+        </select>
+        <button id="loadHistoryBtn" class="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-600 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Charger
+        </button>
+    </div>
+    <div id="historyList" class="space-y-3">
+        <div class="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-slate-500">
+            <i data-lucide="clock" class="w-10 h-10 mb-2 opacity-50"></i>
+            <p class="text-sm">Cliquez sur "Charger" pour voir les generations</p>
+        </div>
+    </div>
+    <div id="historyPagination" class="flex justify-center items-center gap-3 mt-4" style="display: none;"></div>
+</section>
+
+<!-- History Modal -->
+<div id="historyModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60]" style="display: none;">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-[95%] max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div class="sticky top-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between gap-3 flex-wrap z-10">
+            <h2 class="text-base font-semibold flex items-center gap-2">
+                <i data-lucide="file-text" class="w-4.5 h-4.5 text-blue-600 dark:text-blue-400"></i>
+                Details de la generation
+            </h2>
+            <div class="flex items-center gap-2 flex-wrap">
+                <button id="histCopyRichBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" title="Copier le texte riche">
+                    <i data-lucide="clipboard" class="w-3.5 h-3.5"></i> Riche
+                </button>
+                <button id="histCopyHtmlBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" title="Copier le HTML">
+                    <i data-lucide="code" class="w-3.5 h-3.5"></i> HTML
+                </button>
+                <button id="exportHistoryBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-lg text-xs font-medium transition-colors">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Exporter
+                </button>
+                <button class="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" onclick="App.closeHistoryModal()">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+        <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
+                <div class="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Template</span>
+                    <p class="font-medium mt-0.5" id="historyTemplateName"></p>
+                </div>
+                <div class="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Date</span>
+                    <p class="font-medium mt-0.5" id="historyDate"></p>
+                </div>
+                <div class="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Provider</span>
+                    <p class="font-medium mt-0.5" id="historyProvider"></p>
+                </div>
+                <div class="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Modele</span>
+                    <p class="font-medium mt-0.5" id="historyModel"></p>
+                </div>
+            </div>
+            <div class="mb-4">
+                <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Variables</h4>
+                <div id="historyVariables" class="text-sm"></div>
+            </div>
+            <div>
+                <h4 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Resultat genere</h4>
+                <div id="historyResultContent" class="result-content rendered-markdown bg-slate-50 dark:bg-slate-800/30 rounded-xl p-5 max-h-[400px] overflow-y-auto"></div>
+            </div>
+            <div id="historyVersionsPanel" class="mt-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700" style="display: none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Footer -->
+<footer class="border-t border-slate-200 dark:border-slate-800 mt-4">
+    <div class="py-6">
+        <p class="text-center text-xs text-slate-400 dark:text-slate-500">AI Tool Builder &mdash; Systeme de templates dynamiques</p>
+    </div>
 </footer>
+
+<script>if (typeof lucide !== 'undefined') lucide.createIcons();</script>
 {% endblock %}
 
 {% block scripts %}

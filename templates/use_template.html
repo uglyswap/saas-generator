@@ -1,117 +1,148 @@
 {% extends "base.html" %}
-{% block title %}{{ template.name }} - SaaS Generator{% endblock %}
+{% block title %}{{ template.name }} - AI Tool Builder{% endblock %}
 
 {% block content %}
-<header>
-    <h1>{{ template.name }}</h1>
-    <p class="subtitle">{{ template.description or 'Remplissez les variables pour generer votre resultat' }}</p>
-    <a href="{{ url_for('views.index') }}" class="btn btn-outline btn-sm">&larr; Retour aux templates</a>
-</header>
+<!-- Breadcrumb -->
+<div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-6">
+    <a href="{{ url_for('views.index') }}" class="hover:text-slate-700 dark:hover:text-slate-200 transition-colors">Dashboard</a>
+    <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+    <span class="text-slate-900 dark:text-slate-100 truncate max-w-[200px]">{{ template.name }}</span>
+</div>
 
-<main>
-    <!-- Provider Config -->
-    <section class="config-section">
-        <button id="toggleConfig" class="config-toggle">
-            <span>Configuration Provider &amp; Modele</span>
-        </button>
-        <div id="configPanel" class="config-panel" style="display: none;">
-            <div class="config-content">
-                <h3>Selection du Provider</h3>
+<!-- Header -->
+<div class="mb-6">
+    <h1 class="text-xl font-semibold mb-1">{{ template.name }}</h1>
+    <p class="text-sm text-slate-500 dark:text-slate-400">{{ template.description or 'Remplissez les variables pour generer votre resultat' }}</p>
+</div>
 
-                {% if template.default_provider and template.default_model %}
-                <div class="config-note success">
-                    <strong>Defaults du template "{{ template.name }}"</strong>
-                    <p>
-                        Provider : {{ config.providers[template.default_provider].name if template.default_provider in config.providers else template.default_provider }}<br>
-                        Modele : {{ template.default_model }}
-                    </p>
-                </div>
-                {% endif %}
-
-                <div class="input-group">
-                    <label for="providerSelect">Provider</label>
-                    <select id="providerSelect">
+<!-- Provider & Model Config -->
+<section class="mb-6">
+    <button id="toggleConfig" class="w-full flex items-center justify-between px-5 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700 transition-all">
+        <div class="flex items-center gap-2">
+            <i data-lucide="settings" class="w-4 h-4 text-slate-400"></i>
+            <span>Provider &amp; Modele</span>
+        </div>
+        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400"></i>
+    </button>
+    <div id="configPanel" class="mt-3" style="display: none;">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+            <div class="flex items-end gap-3 flex-wrap">
+                <div class="flex-1 min-w-[180px]">
+                    <label for="providerSelect" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Provider</label>
+                    <select id="providerSelect" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                         {% for pid, pinfo in config.providers.items() %}
                         <option value="{{ pid }}"
-                            {% if pid == template.default_provider %}selected{% endif %}>
-                            {{ pinfo.name }}
+                            {% if pid == template.default_provider %}selected{% endif %}
+                            {% if not pinfo.has_api_key %}disabled{% endif %}>
+                            {{ pinfo.name }}{% if not pinfo.has_api_key %} (cle manquante){% endif %}
                         </option>
                         {% endfor %}
                     </select>
                 </div>
-
-                <div class="input-group">
-                    <label for="modelSelect">Modele</label>
-                    <select id="modelSelect"></select>
-                    <button id="refreshModelsBtn" class="btn btn-sm btn-outline">Rafraichir les modeles</button>
+                <div class="flex-1 min-w-[180px]">
+                    <label for="modelSelect" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Modele</label>
+                    <select id="modelSelect" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"></select>
                 </div>
-
-                <div class="input-group">
-                    <label for="apiKeyInput">Cle API</label>
-                    <input type="password" id="apiKeyInput" placeholder="Entrez votre cle API">
-                </div>
-
-                <div class="config-actions">
-                    <button id="saveApiKeyBtn" class="btn btn-primary">Sauvegarder la cle API</button>
-                </div>
+                <button id="refreshModelsBtn" class="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Rafraichir
+                </button>
             </div>
-        </div>
-    </section>
-
-    <!-- Variables Form -->
-    <section class="form-section">
-        <div class="form-container">
-            <h2>Remplissez les Variables</h2>
-            <p class="help-text" style="margin-bottom: 20px;">
-                Variables detectees : <strong>{{ variables|length }}</strong>
-            </p>
-
-            <form id="generateForm">
-                {% for var in variables %}
-                <div class="input-group">
-                    <label for="var_{{ var }}">{{ var }}</label>
-                    <textarea id="var_{{ var }}" name="{{ var }}" rows="3" required
-                              maxlength="10000"
-                              placeholder="Entrez la valeur pour {{ var }}"></textarea>
-                </div>
-                {% endfor %}
-
-                <div class="generate-actions">
-                    <button type="submit" class="btn btn-large btn-primary" id="generateBtn">
-                        Generer le resultat
-                    </button>
-                    <label class="checkbox-label" style="margin-top: 10px;">
-                        <input type="checkbox" id="streamToggle" checked> Streaming en temps reel
-                    </label>
-                </div>
-            </form>
-        </div>
-    </section>
-
-    <!-- Result Modal -->
-    <div id="resultModal" class="modal" style="display: none;">
-        <div class="modal-content modal-large">
-            <div class="modal-header">
-                <h2>Resultat genere</h2>
-                <div style="display: flex; gap: 10px;">
-                    <button id="exportBtn" class="btn btn-secondary">Exporter en Markdown</button>
-                    <button id="closeResultBtn" class="btn btn-outline btn-sm">X</button>
-                </div>
-            </div>
-            <div class="modal-body">
-                <div id="streamProgress" class="stream-progress" style="display: none;">
-                    <div class="stream-bar"><div class="stream-bar-fill"></div></div>
-                    <span class="stream-status">Generation en cours...</span>
-                </div>
-                <div id="resultContent" class="result-content markdown"></div>
-            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-3">Gerez vos cles API depuis la <a href="{{ url_for('views.index') }}" class="text-blue-600 dark:text-blue-400 hover:underline">page d'accueil</a> &gt; Configuration</p>
         </div>
     </div>
-</main>
+</section>
 
-<footer>
-    <p>SaaS Generator &mdash; Systeme de templates dynamiques</p>
+<!-- Variables Form -->
+<section class="mb-6">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+        <h2 class="text-base font-semibold mb-1 flex items-center gap-2">
+            <i data-lucide="braces" class="w-4.5 h-4.5 text-blue-600 dark:text-blue-400"></i>
+            Remplissez les Variables
+        </h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-5">
+            Variables detectees : <strong class="text-slate-700 dark:text-slate-300">{{ variables|length }}</strong>
+        </p>
+
+        <form id="generateForm" class="space-y-4">
+            {% for var in variables %}
+            <div>
+                <label for="var_{{ var }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">{{ var }}</label>
+                <textarea id="var_{{ var }}" name="{{ var }}" rows="3" required maxlength="10000"
+                          placeholder="Entrez la valeur pour {{ var }}"
+                          class="w-full px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm resize-y"></textarea>
+            </div>
+            {% endfor %}
+
+            <div class="pt-4 space-y-3">
+                <button type="submit" id="generateBtn" class="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm transition-colors">
+                    <i data-lucide="rocket" class="w-4 h-4"></i>
+                    Generer le resultat
+                </button>
+                <label class="flex items-center justify-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="streamToggle" checked class="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Streaming en temps reel</span>
+                </label>
+            </div>
+        </form>
+    </div>
+</section>
+
+<!-- Result Modal -->
+<div id="resultModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60]" style="display: none;">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-[95%] max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <!-- Modal Header -->
+        <div class="sticky top-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between gap-3 flex-wrap z-10">
+            <h2 class="text-base font-semibold flex items-center gap-2">
+                <i data-lucide="sparkles" class="w-4.5 h-4.5 text-blue-600 dark:text-blue-400"></i>
+                Resultat genere
+            </h2>
+            <div class="flex items-center gap-2 flex-wrap">
+                <button id="copyRichBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" title="Copier le texte riche">
+                    <i data-lucide="clipboard" class="w-3.5 h-3.5"></i> Riche
+                </button>
+                <button id="copyHtmlBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" title="Copier le HTML">
+                    <i data-lucide="code" class="w-3.5 h-3.5"></i> HTML
+                </button>
+                <button id="editBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" style="display: none;">
+                    <i data-lucide="edit-2" class="w-3.5 h-3.5"></i> Modifier
+                </button>
+                <button id="saveEditBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium transition-colors" style="display: none;">
+                    <i data-lucide="check" class="w-3.5 h-3.5"></i> Sauvegarder
+                </button>
+                <button id="cancelEditBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" style="display: none;">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i> Annuler
+                </button>
+                <button id="exportBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-lg text-xs font-medium transition-colors">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Exporter
+                </button>
+                <button id="closeResultBtn" class="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+        <!-- Modal Body -->
+        <div class="p-6">
+            <div id="streamProgress" class="flex items-center gap-3 mb-4 px-1" style="display: none;">
+                <div class="flex-1 h-1 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-500 rounded-full" style="width:30%;animation:streamPulse 1.5s ease-in-out infinite"></div>
+                </div>
+                <span class="stream-status text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">Generation en cours...</span>
+            </div>
+            <div id="resultContent" class="result-content rendered-markdown bg-slate-50 dark:bg-slate-800/30 rounded-xl p-5 min-h-[200px]"></div>
+            <textarea id="editTextarea" class="w-full min-h-[400px] px-4 py-3 bg-white dark:bg-slate-800 border-2 border-blue-500 rounded-xl font-mono text-sm text-slate-900 dark:text-slate-100 focus:outline-none resize-y" style="display: none;" rows="20" placeholder="Modifiez le markdown ici..."></textarea>
+            <div id="versionsPanel" class="mt-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700" style="display: none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Footer -->
+<footer class="border-t border-slate-200 dark:border-slate-800 mt-8">
+    <div class="py-6">
+        <p class="text-center text-xs text-slate-400 dark:text-slate-500">AI Tool Builder &mdash; Systeme de templates dynamiques</p>
+    </div>
 </footer>
+
+<script>if (typeof lucide !== 'undefined') lucide.createIcons();</script>
 {% endblock %}
 
 {% block scripts %}

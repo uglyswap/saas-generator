@@ -1,40 +1,70 @@
 {% extends "base.html" %}
-{% block title %}Configuration initiale - SaaS Generator{% endblock %}
+{% block title %}Configuration initiale - AI Tool Builder{% endblock %}
 
 {% block content %}
-<div class="auth-container">
-    <div class="auth-card">
-        <h1>Configuration initiale</h1>
-        <p class="auth-subtitle">Creez votre compte administrateur pour commencer</p>
-
-        <form method="POST" action="{{ url_for('auth.setup_post') }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-            <div class="input-group">
-                <label for="username">Nom d'utilisateur</label>
-                <input type="text" id="username" name="username" required autofocus
-                       placeholder="admin" value="admin" minlength="3" maxlength="80">
+<div class="flex items-center justify-center min-h-[80vh] -mt-6">
+    <div class="w-full max-w-md">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 shadow-sm">
+            <!-- Logo -->
+            <div class="flex justify-center mb-6">
+                <div class="w-12 h-12 bg-blue-600 dark:bg-blue-500 rounded-xl flex items-center justify-center">
+                    <i data-lucide="zap" class="w-7 h-7 text-white"></i>
+                </div>
             </div>
+            <h1 class="text-2xl font-bold text-center mb-1">Configuration initiale</h1>
+            <p class="text-center text-sm text-slate-500 dark:text-slate-400 mb-8">Creez votre compte administrateur pour commencer</p>
 
-            <div class="input-group">
-                <label for="email">Email</label>
-                <input type="email" id="email" name="email" required
-                       placeholder="admin@votre-entreprise.com">
-            </div>
+            <form method="POST" action="{{ url_for('auth.setup_post') }}" class="space-y-5">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-            <div class="input-group">
-                <label for="password">Mot de passe</label>
-                <input type="password" id="password" name="password" required
-                       placeholder="min. 8 car., 1 maj., 1 min., 1 chiffre" minlength="8">
-            </div>
+                <div>
+                    <label for="username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Nom d'utilisateur</label>
+                    <div class="relative">
+                        <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                        <input type="text" id="username" name="username" required autofocus
+                               placeholder="admin" value="admin" minlength="3" maxlength="80"
+                               class="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
+                    </div>
+                </div>
 
-            <div class="input-group">
-                <label for="password_confirm">Confirmer le mot de passe</label>
-                <input type="password" id="password_confirm" name="password_confirm" required>
-            </div>
+                <div>
+                    <label for="email" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Email</label>
+                    <div class="relative">
+                        <i data-lucide="mail" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                        <input type="email" id="email" name="email" required
+                               placeholder="admin@votre-entreprise.com"
+                               class="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
+                    </div>
+                </div>
 
-            <button type="submit" class="btn btn-primary btn-large">Demarrer SaaS Generator</button>
-        </form>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Mot de passe</label>
+                    <div class="relative">
+                        <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                        <input type="password" id="password" name="password" required
+                               placeholder="min. 8 car., 1 maj., 1 min., 1 chiffre" minlength="8"
+                               class="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
+                    </div>
+                </div>
+
+                <div>
+                    <label for="password_confirm" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Confirmer le mot de passe</label>
+                    <div class="relative">
+                        <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                        <input type="password" id="password_confirm" name="password_confirm" required
+                               placeholder="repetez le mot de passe"
+                               class="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
+                    </div>
+                </div>
+
+                <button type="submit" class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors">
+                    <i data-lucide="rocket" class="w-4 h-4"></i>
+                    Demarrer AI Tool Builder
+                </button>
+            </form>
+        </div>
     </div>
 </div>
+
+<script>if (typeof lucide !== 'undefined') lucide.createIcons();</script>
 {% endblock %}

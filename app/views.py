@@ -3,7 +3,8 @@ import logging
 from flask import Blueprint, render_template, abort, current_app
 from flask_login import login_required, current_user
 
-from app.models import ProviderConfig
+from app import db
+from app.models import ProviderConfig, User
 from app.services.template_service import get_user_templates, get_template
 from app.utils.security import decrypt_api_key
 from app.utils.validators import extract_variables
@@ -26,15 +27,24 @@ def _build_config_for_frontend(user_id: int) -> dict:
             'models': (pc.models_cache if pc else []) or [],
         }
 
-    # Determine selected provider/model
+    # Determine selected provider/model from user's explicit default
+    user = db.session.get(User, user_id)
     selected_provider = 'zai'
     selected_model = 'glm-4.7'
-    for pid in providers:
-        pc = ProviderConfig.query.filter_by(user_id=user_id, provider_id=pid).first()
+
+    if user and user.default_provider and user.default_provider in providers:
+        selected_provider = user.default_provider
+        pc = ProviderConfig.query.filter_by(user_id=user_id, provider_id=selected_provider).first()
         if pc and pc.selected_model:
-            selected_provider = pid
             selected_model = pc.selected_model
-            break
+    else:
+        # Fallback: find first provider with a selected model
+        for pid in providers:
+            pc = ProviderConfig.query.filter_by(user_id=user_id, provider_id=pid).first()
+            if pc and pc.selected_model:
+                selected_provider = pid
+                selected_model = pc.selected_model
+                break
 
     return {
         'providers': providers_config,

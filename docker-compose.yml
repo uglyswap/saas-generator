@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_URL=postgresql://saas:saas@db:5432/saas_generator
+      - FLASK_ENV=production
+    volumes:
+      - ./exports:/app/exports
+      - ./instance:/app/instance
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=saas
+      - POSTGRES_PASSWORD=saas
+      - POSTGRES_DB=saas_generator
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

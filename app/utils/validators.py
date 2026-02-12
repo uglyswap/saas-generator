@@ -114,12 +114,14 @@ def validate_password(password: str) -> Tuple[bool, Optional[str]]:
 def extract_variables(content: str) -> List[str]:
     """Extract {variable} placeholders from template content.
 
-    Only matches valid Python-style identifiers (including Unicode letters).
+    Matches any non-empty text inside single braces, including spaces.
+    Examples: {name}, {nom du projet}, {cheval de course}
     """
-    pattern = r'\{(\w+)\}'
+    pattern = r'\{([^{}]+)\}'
     matches = re.findall(pattern, content, re.UNICODE)
-    # Deduplicate while preserving order
-    return list(dict.fromkeys(matches))
+    # Strip whitespace from edges and deduplicate while preserving order
+    cleaned = [m.strip() for m in matches if m.strip()]
+    return list(dict.fromkeys(cleaned))
 
 
 def safe_substitute(template_content: str, variables: dict) -> str:
@@ -131,9 +133,9 @@ def safe_substitute(template_content: str, variables: dict) -> str:
     is treated as literal text.
     """
     def _replacer(match: re.Match) -> str:
-        key = match.group(1)
+        key = match.group(1).strip()
         if key in variables:
             return str(variables[key])
         return match.group(0)  # Leave unknown placeholders as-is
 
-    return re.sub(r'\{(\w+)\}', _replacer, template_content)
+    return re.sub(r'\{([^{}]+)\}', _replacer, template_content)
