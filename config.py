@@ -16,11 +16,13 @@ class Config:
     ENCRYPTION_KEY: str = os.environ.get('ENCRYPTION_KEY', '')
 
     # LLM Provider definitions
+    # Coding Plan endpoint: https://api.z.ai/api/coding/paas/v4
+    # Standard API endpoint: https://api.z.ai/api/paas/v4
     PROVIDERS: dict = {
         'zai': {
-            'name': 'Z.AI',
-            'api_url': 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-            'models_url': 'https://open.bigmodel.cn/api/paas/v4/models',
+            'name': 'Z.AI Coding Plan',
+            'api_url': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
+            'models_url': 'https://api.z.ai/api/coding/paas/v4/models',
             'default_model': 'glm-4.7',
         },
         'openrouter': {
@@ -34,6 +36,20 @@ class Config:
     # History pagination
     HISTORY_PER_PAGE: int = 20
     HISTORY_MAX_ENTRIES: int = 500
+
+    # Default meta-prompt for AI template content generation
+    DEFAULT_META_PROMPT: str = (
+        "Tu es un expert en prompt engineering. A partir du nom et de la description d'un template, "
+        "genere le contenu complet du prompt.\n\n"
+        "Le prompt genere DOIT:\n"
+        "- Utiliser des variables entre accolades {comme_ceci} aux endroits ou l'utilisateur devra fournir des informations\n"
+        "- Etre detaille, structure et professionnel\n"
+        "- Contenir des instructions claires pour un LLM\n"
+        "- Etre en francais\n\n"
+        "Nom du template: {nom_template}\n"
+        "Description du template: {description_template}\n\n"
+        "Genere UNIQUEMENT le contenu du prompt, sans explication ni commentaire."
+    )
 
 
 class DevelopmentConfig(Config):
