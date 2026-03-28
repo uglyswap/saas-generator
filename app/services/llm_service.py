@@ -13,6 +13,20 @@ _PROVIDER_PARAMS: Dict[str, dict] = {
     'zai': {'thinking': {'type': 'disabled'}},
 }
 
+# Static model lists for providers that don't expose a /models endpoint
+_STATIC_MODELS: Dict[str, list] = {
+    'alibaba': [
+        {'id': 'kimi-k2.5', 'name': 'Kimi K2.5 (Recommended)', 'description': 'Moonshot AI - vision capable'},
+        {'id': 'qwen3.5-plus', 'name': 'Qwen 3.5 Plus (Recommended)', 'description': 'Alibaba - vision capable'},
+        {'id': 'glm-5', 'name': 'GLM-5 (Recommended)', 'description': 'Zhipu AI'},
+        {'id': 'MiniMax-M2.5', 'name': 'MiniMax M2.5 (Recommended)', 'description': 'MiniMax'},
+        {'id': 'qwen3-coder-plus', 'name': 'Qwen 3 Coder Plus', 'description': 'Alibaba - coding specialist'},
+        {'id': 'qwen3-coder-next', 'name': 'Qwen 3 Coder Next', 'description': 'Alibaba - next-gen coding'},
+        {'id': 'qwen3-max-2026-01-23', 'name': 'Qwen 3 Max', 'description': 'Alibaba - max capability'},
+        {'id': 'glm-4.7', 'name': 'GLM-4.7', 'description': 'Zhipu AI'},
+    ],
+}
+
 
 def get_provider_info(provider_id: str) -> Optional[dict]:
     """Return provider definition from app config."""
@@ -161,6 +175,11 @@ def fetch_models(
         return None, f"Provider inconnu : {provider_id}"
     if not api_key:
         return None, f"Cle API manquante pour {provider['name']}"
+
+    # Some providers (e.g. Alibaba Coding Plan) don't expose a /models endpoint.
+    # Return the static model list if available.
+    if provider_id in _STATIC_MODELS:
+        return list(_STATIC_MODELS[provider_id]), None
 
     try:
         resp = http_requests.get(
