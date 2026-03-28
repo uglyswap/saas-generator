@@ -31,6 +31,12 @@ class Config:
             'models_url': 'https://openrouter.ai/api/v1/models',
             'default_model': 'anthropic/claude-3.5-sonnet',
         },
+        'alibaba': {
+            'name': 'Alibaba Coding Plan',
+            'api_url': 'https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions',
+            'models_url': 'https://coding-intl.dashscope.aliyuncs.com/v1/models',
+            'default_model': 'kimi-k2.5',
+        },
     }
 
     # History pagination
