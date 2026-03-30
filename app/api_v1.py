@@ -417,7 +417,11 @@ def generate_stream():
             err_msg = 'Erreur inconnue'
         def error_stream():
             yield f"data: {_json.dumps({'type': 'error', 'message': err_msg}, ensure_ascii=False)}\n\n"
-        return Response(error_stream(), mimetype='text/event-stream')
+        return Response(error_stream(), mimetype='text/event-stream', headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        })
 
     tpl_id = ctx['tpl'].id
     tpl_name = ctx['tpl'].name
@@ -456,7 +460,11 @@ def generate_stream():
                 )
                 yield f"data: {_json.dumps({'type': 'saved', 'entry_id': entry.id})}\n\n"
 
-    return Response(event_stream(), mimetype='text/event-stream')
+    return Response(event_stream(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    })
 
 
 # -----------------------------------------------------------------------

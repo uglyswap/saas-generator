@@ -11,15 +11,26 @@ logger = logging.getLogger(__name__)
 # Provider-specific parameters added to every request
 _PROVIDER_PARAMS: Dict[str, dict] = {
     'zai': {'thinking': {'type': 'disabled'}},
+    'alibaba': {'thinking': {'type': 'disabled'}},
 }
 
-# Static model lists for providers that don't expose a /models endpoint
+# Static model lists — used as fallback and merged with dynamic API results
 _STATIC_MODELS: Dict[str, list] = {
+    'zai': [
+        {'id': 'glm-5.1', 'name': 'GLM-5.1 (Recommended)', 'description': 'Zhipu AI - latest generation'},
+        {'id': 'glm-5', 'name': 'GLM-5', 'description': 'Zhipu AI'},
+        {'id': 'kimi-k2.5', 'name': 'Kimi K2.5', 'description': 'Moonshot AI - vision capable'},
+        {'id': 'MiniMax-M2.5', 'name': 'MiniMax M2.5', 'description': 'MiniMax'},
+        {'id': 'qwen3.5-plus', 'name': 'Qwen 3.5 Plus', 'description': 'Alibaba - vision capable'},
+        {'id': 'qwen3-coder-plus', 'name': 'Qwen 3 Coder Plus', 'description': 'Alibaba - coding specialist'},
+        {'id': 'glm-4.7', 'name': 'GLM-4.7', 'description': 'Zhipu AI'},
+    ],
     'alibaba': [
+        {'id': 'glm-5.1', 'name': 'GLM-5.1 (Recommended)', 'description': 'Zhipu AI - latest generation'},
         {'id': 'kimi-k2.5', 'name': 'Kimi K2.5 (Recommended)', 'description': 'Moonshot AI - vision capable'},
         {'id': 'qwen3.5-plus', 'name': 'Qwen 3.5 Plus (Recommended)', 'description': 'Alibaba - vision capable'},
-        {'id': 'glm-5', 'name': 'GLM-5 (Recommended)', 'description': 'Zhipu AI'},
-        {'id': 'MiniMax-M2.5', 'name': 'MiniMax M2.5 (Recommended)', 'description': 'MiniMax'},
+        {'id': 'glm-5', 'name': 'GLM-5', 'description': 'Zhipu AI'},
+        {'id': 'MiniMax-M2.5', 'name': 'MiniMax M2.5', 'description': 'MiniMax'},
         {'id': 'qwen3-coder-plus', 'name': 'Qwen 3 Coder Plus', 'description': 'Alibaba - coding specialist'},
         {'id': 'qwen3-coder-next', 'name': 'Qwen 3 Coder Next', 'description': 'Alibaba - next-gen coding'},
         {'id': 'qwen3-max-2026-01-23', 'name': 'Qwen 3 Max', 'description': 'Alibaba - max capability'},
@@ -145,7 +156,10 @@ def stream_llm_api(
             try:
                 chunk = json.loads(data_str)
                 delta = chunk.get('choices', [{}])[0].get('delta', {})
-                token = delta.get('content', '')
+                token = delta.get('content', '') or ''
+                # Fallback to reasoning_content for thinking models
+                if not token:
+                    token = delta.get('reasoning_content', '') or ''
                 if token:
                     full_content += token
                     yield _sse({'type': 'token', 'content': token})
@@ -169,18 +183,18 @@ def fetch_models(
     provider_id: str,
     api_key: str,
 ) -> Tuple[Optional[list], Optional[str]]:
-    """Fetch available models from a provider API."""
+    """Fetch available models. Tries dynamic API, then merges with static known models."""
     provider = get_provider_info(provider_id)
     if not provider:
         return None, f"Provider inconnu : {provider_id}"
     if not api_key:
         return None, f"Cle API manquante pour {provider['name']}"
 
-    # Some providers (e.g. Alibaba Coding Plan) don't expose a /models endpoint.
-    # Return the static model list if available.
-    if provider_id in _STATIC_MODELS:
-        return list(_STATIC_MODELS[provider_id]), None
+    static = _STATIC_MODELS.get(provider_id, [])
+    dynamic: list = []
+    fetch_error: Optional[str] = None
 
+    # Attempt dynamic fetch from provider API
     try:
         resp = http_requests.get(
             provider['models_url'],
@@ -190,7 +204,6 @@ def fetch_models(
         resp.raise_for_status()
         data = resp.json()
 
-        models = []
         for m in data.get('data', []):
             info: Dict[str, Any] = {
                 'id': m.get('id'),
@@ -200,25 +213,38 @@ def fetch_models(
             if provider_id == 'openrouter':
                 info['context_length'] = m.get('context_length', 0)
                 info['pricing'] = m.get('pricing', {})
-            models.append(info)
-
-        models.sort(key=lambda x: (x.get('id') or '').lower())
-        return models, None
+            dynamic.append(info)
 
     except http_requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
-        if status == 401:
-            return None, "Cle API invalide"
-        if status == 429:
-            return None, "Trop de requetes"
-        return None, f"Erreur HTTP {status}"
+        fetch_error = ("Cle API invalide" if status == 401
+                       else "Trop de requetes" if status == 429
+                       else f"Erreur HTTP {status}")
     except http_requests.exceptions.ConnectionError:
-        return None, "Erreur de connexion"
+        fetch_error = "Erreur de connexion"
     except http_requests.exceptions.Timeout:
-        return None, "Delai d'attente depasse"
+        fetch_error = "Delai d'attente depasse"
     except Exception as exc:
         logger.error('Fetch models error: %s', exc, exc_info=True)
-        return None, f"Erreur : {exc}"
+        fetch_error = f"Erreur : {exc}"
+
+    # Merge dynamic + static (add static models missing from dynamic list)
+    if dynamic:
+        models = list(dynamic)
+        if static:
+            dynamic_ids = {m['id'] for m in dynamic}
+            models.extend(m for m in static if m['id'] not in dynamic_ids)
+        models.sort(key=lambda x: (x.get('id') or '').lower())
+        return models, None
+
+    # Dynamic failed or empty — use static fallback
+    if static:
+        if fetch_error:
+            logger.warning('Dynamic fetch failed for %s (%s), using static list', provider_id, fetch_error)
+        return list(static), None
+
+    # No static fallback available — return the error
+    return None, fetch_error or "Aucun modele disponible"
 
 
 def _sse(data: dict) -> str:

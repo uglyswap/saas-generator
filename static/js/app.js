@@ -103,7 +103,7 @@ const App = (() => {
     }
 
     // ---------------------------------------------------------------
-    // Markdown Rendering (Phase 1)
+    // Content Rendering - HTML detection + Markdown (Phase 1)
     // ---------------------------------------------------------------
 
     let markdownReady = false;
@@ -130,33 +130,81 @@ const App = (() => {
         markdownReady = true;
     }
 
-    function renderMarkdown(raw, element) {
-        if (!markdownReady || !element) return;
-        element.innerHTML = marked.parse(raw || '');
-        element.classList.remove('markdown');
-        element.classList.add('rendered-markdown');
-        // Render mermaid diagrams
-        if (typeof mermaid !== 'undefined') {
-            const mermaidBlocks = element.querySelectorAll('code.language-mermaid');
-            mermaidBlocks.forEach((block, i) => {
-                const pre = block.parentElement;
-                const div = document.createElement('div');
-                div.className = 'mermaid';
-                div.textContent = block.textContent;
-                pre.replaceWith(div);
-            });
-            try { mermaid.run({ nodes: element.querySelectorAll('.mermaid') }); } catch {}
+    /**
+     * Detect if content is raw HTML rather than Markdown.
+     * Prevents marked.parse() from mangling HTML output (escaping, tag
+     * reinterpretation, blank-line splitting of HTML blocks, etc.).
+     */
+    function isHtmlContent(text) {
+        if (!text) return false;
+        const trimmed = text.trimStart();
+        // Full HTML document markers
+        if (/^<!doctype\s/i.test(trimmed)) return true;
+        if (/^<html[\s>]/i.test(trimmed)) return true;
+        // Starts with a block-level HTML tag and has significant tag density
+        if (/^<(div|section|article|main|header|footer|nav|aside|table|form|details|figure|style|head|body|ul|ol)[\s>]/i.test(trimmed)) {
+            const sample = trimmed.substring(0, 1000);
+            const tags = sample.match(/<\/?[a-z][a-z0-9]*[\s>\/]/gi);
+            return tags && tags.length >= 4;
+        }
+        return false;
+    }
+
+    /**
+     * Render content to element — auto-detects HTML vs Markdown.
+     * For HTML content: displays raw source code with syntax highlighting.
+     * For Markdown: parses with marked + mermaid support.
+     */
+    function renderContent(raw, element) {
+        if (!element) return;
+        if (isHtmlContent(raw)) {
+            // Show raw HTML as source code — NOT rendered
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'margin:0;overflow-x:auto;';
+            const code = document.createElement('code');
+            code.className = 'language-html hljs';
+            code.textContent = raw || '';
+            pre.appendChild(code);
+            element.innerHTML = '';
+            element.appendChild(pre);
+            element.classList.remove('markdown');
+            element.classList.add('rendered-markdown', 'html-content');
+            if (typeof hljs !== 'undefined') {
+                try { hljs.highlightElement(code); } catch {}
+            }
+        } else if (markdownReady) {
+            element.innerHTML = marked.parse(raw || '');
+            element.classList.remove('markdown', 'html-content');
+            element.classList.add('rendered-markdown');
+            // Render mermaid diagrams
+            if (typeof mermaid !== 'undefined') {
+                const mermaidBlocks = element.querySelectorAll('code.language-mermaid');
+                mermaidBlocks.forEach((block, i) => {
+                    const pre = block.parentElement;
+                    const div = document.createElement('div');
+                    div.className = 'mermaid';
+                    div.textContent = block.textContent;
+                    pre.replaceWith(div);
+                });
+                try { mermaid.run({ nodes: element.querySelectorAll('.mermaid') }); } catch {}
+            }
+        } else {
+            element.textContent = raw || '';
         }
     }
 
+    // Legacy alias — all call sites now go through renderContent
+    function renderMarkdown(raw, element) {
+        renderContent(raw, element);
+    }
+
     function renderMarkdownThrottled(raw, element) {
-        if (!markdownReady || !element) return;
+        if (!element) return;
+        if (!markdownReady && !isHtmlContent(raw)) return;
         if (renderThrottleTimer) return;
         renderThrottleTimer = setTimeout(() => {
             renderThrottleTimer = null;
-            element.innerHTML = marked.parse(raw || '');
-            element.classList.remove('markdown');
-            element.classList.add('rendered-markdown');
+            renderContent(raw, element);
             element.scrollTop = element.scrollHeight;
         }, 100);
     }
@@ -166,7 +214,7 @@ const App = (() => {
             clearTimeout(renderThrottleTimer);
             renderThrottleTimer = null;
         }
-        renderMarkdown(raw, element);
+        renderContent(raw, element);
     }
 
     // ---------------------------------------------------------------
