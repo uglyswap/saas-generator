@@ -25,4 +25,13 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 5000
 
 # Run with gunicorn
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--access-logfile", "-", "--error-logfile", "-", "app:create_app('production')"]
+CMD ["gunicorn", \
+     "-k", "gevent", \
+     "-w", "4", \
+     "-b", "0.0.0.0:5000", \
+     "--timeout", "300", \
+     "--graceful-timeout", "300", \
+     "--keep-alive", "65", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "app:create_app('production')"]
