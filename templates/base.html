@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="256x256" href="{{ url_for('static', filename='favicon.png') }}">
     <title>{% block title %}AI Tool Builder{% endblock %}</title>
 
     <!-- Anti-flicker dark mode -->
