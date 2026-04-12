@@ -32,10 +32,10 @@ class Config:
             'default_model': 'anthropic/claude-3.5-sonnet',
         },
         'alibaba': {
-            'name': 'Alibaba Coding Plan',
+            'name': 'Alibaba Cloud Coding Plan',
             'api_url': 'https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions',
             'models_url': 'https://coding-intl.dashscope.aliyuncs.com/v1/models',
-            'default_model': 'kimi-k2.5',
+            'default_model': 'qwen3.6-plus',
         },
     }
 

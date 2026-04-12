@@ -26,9 +26,10 @@ _STATIC_MODELS: Dict[str, list] = {
         {'id': 'glm-4.7', 'name': 'GLM-4.7', 'description': 'Zhipu AI'},
     ],
     'alibaba': [
+        {'id': 'qwen3.6-plus', 'name': 'Qwen 3.6 Plus (Recommended)', 'description': 'Alibaba Cloud Coding Plan - latest generation, 1M context'},
         {'id': 'glm-5.1', 'name': 'GLM-5.1 (Recommended)', 'description': 'Zhipu AI - latest generation'},
         {'id': 'kimi-k2.5', 'name': 'Kimi K2.5 (Recommended)', 'description': 'Moonshot AI - vision capable'},
-        {'id': 'qwen3.5-plus', 'name': 'Qwen 3.5 Plus (Recommended)', 'description': 'Alibaba - vision capable'},
+        {'id': 'qwen3.5-plus', 'name': 'Qwen 3.5 Plus', 'description': 'Alibaba - vision capable'},
         {'id': 'glm-5', 'name': 'GLM-5', 'description': 'Zhipu AI'},
         {'id': 'MiniMax-M2.5', 'name': 'MiniMax M2.5', 'description': 'MiniMax'},
         {'id': 'qwen3-coder-plus', 'name': 'Qwen 3 Coder Plus', 'description': 'Alibaba - coding specialist'},
