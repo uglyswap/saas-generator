@@ -39,7 +39,10 @@ REM Create .env from .env.example if it doesn't exist
 if not exist ".env" (
     echo Creation du fichier .env depuis .env.example...
     copy .env.example .env >nul
-    echo [INFO] Editez le fichier .env pour configurer SECRET_KEY
+    REM Remplace le placeholder par un SECRET_KEY aleatoire fort
+    REM (l'app refuse de demarrer en production avec un placeholder connu)
+    python -c "import re,secrets; p='.env'; s=open(p,encoding='utf-8').read(); s=re.sub(r'(?m)^SECRET_KEY=.*$','SECRET_KEY='+secrets.token_hex(32),s); open(p,'w',encoding='utf-8').write(s)"
+    echo [INFO] SECRET_KEY genere automatiquement dans .env
     echo.
 )
 

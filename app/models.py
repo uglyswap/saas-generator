@@ -46,8 +46,9 @@ class Template(db.Model):
     description: str = db.Column(db.Text, default='')
     content: str = db.Column(db.Text, nullable=False)
     variables: list = db.Column(db.JSON, default=list)
-    default_provider: str = db.Column(db.String(50), default='zai')
-    default_model: str = db.Column(db.String(100), default='glm-4.7')
+    # NULL = pas d'override : le defaut general de l'utilisateur s'applique
+    default_provider: Optional[str] = db.Column(db.String(50), nullable=True, default=None)
+    default_model: Optional[str] = db.Column(db.String(100), nullable=True, default=None)
     created_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: datetime = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -60,8 +61,8 @@ class Template(db.Model):
             'description': self.description or '',
             'content': self.content,
             'variables': self.variables or [],
-            'default_provider': self.default_provider,
-            'default_model': self.default_model,
+            'default_provider': self.default_provider or '',
+            'default_model': self.default_model or '',
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

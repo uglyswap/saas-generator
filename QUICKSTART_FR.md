@@ -2,9 +2,9 @@
 
 ## 📌 Comment démarrer l'application
 
-### Option 1 : Double-cliquez sur `start.bat` (RECOMMANDÉ)
+### Option 1 : Double-cliquez sur `start.bat` (Windows)
 
-1. Allez dans le dossier : `C:\Users\quent\saas-generator`
+1. Allez dans le dossier du projet
 2. Double-cliquez sur le fichier `start.bat`
 3. Attendez que l'application démarre
 4. Ouvrez votre navigateur sur : **http://localhost:5000**
@@ -12,61 +12,69 @@
 ### Option 2 : Via la ligne de commande
 
 ```bash
-cd C:\Users\quent\saas-generator
-python app.py
+cd saas-generator
+python -m venv venv
+venv\Scripts\activate          # Windows (Linux/Mac : source venv/bin/activate)
+pip install -r requirements.txt
+python run.py
 ```
 
 Puis ouvrez : **http://localhost:5000**
 
+### Option 3 : Docker
+
+```bash
+echo SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))") > .env
+docker-compose up -d
+```
+
 ---
 
-## ⚠️ Erreur de connexion ? Lisez ceci
+## 👤 Premier lancement
 
-### Problème le plus courant : Timeout de l'API Z.AI
+Au premier démarrage, l'application vous demande de **créer un compte administrateur**
+(page `/auth/setup`). Choisissez un mot de passe fort (8+ caractères, majuscule,
+minuscule, chiffre).
 
-**Message** : "Erreur de connexion au serveur" ou "Délai d'attente dépassé"
+---
 
-**Solution** : C'est normal ! L'API Z.AI prend parfois du temps à répondre.
-- **Réessayez simplement** en cliquant à nouveau sur "Générer"
-- Vérifiez votre connexion internet
-- Attendez quelques secondes entre deux essais
+## 🔑 Configuration des providers LLM
 
-### Autres erreurs fréquentes
+1. Sur la page d'accueil, ouvrez **Configuration**
+2. **Étape 1 - Clés API** : entrez la clé de chaque provider que vous utilisez
+   - Z.AI Coding Plan
+   - OpenRouter
+   - Alibaba Cloud Coding Plan (clé `sk-sp-...`)
+   - OpenCode Go (clé OpenCode Zen)
+3. **Étape 2 - Provider & Modèle par défaut** : choisissez votre couple par défaut
+   (ex. Alibaba + `qwen3.7-plus`), puis **Sauvegarder**
 
-| Erreur | Solution |
-|--------|----------|
-| "Erreur d'authentification" | Vérifiez votre clé API (⚙️ Configuration API) |
-| "Trop de requêtes" | Attendez 1-2 minutes avant de réessayer |
-| "Erreur serveur Z.AI" | Attendez quelques minutes, le serveur est temporairement indisponible |
-
-**Guide complet de dépannage** : Voir le fichier `TROUBLESHOOTING.md`
+Ce **défaut général** s'applique à tous vos templates, sauf si un template
+définit explicitement son propre provider/modèle dans son formulaire.
 
 ---
 
 ## 📝 Comment utiliser l'application
 
-1. **Entrez votre idée de SaaS** dans le formulaire
-   - Exemple : "Une plateforme de gestion de tâches pour équipes distantes"
-
-2. **Cliquez sur "Générer le cahier des charges"**
-   - Attendez 10-30 secondes (parfois plus si l'API est lente)
-
-3. **Lisez le résultat** qui s'affiche automatiquement
-
-4. **Exportez en Markdown** si nécessaire
-   - Cliquez sur "📥 Exporter en Markdown"
-
-5. **Consultez l'historique** pour voir vos générations précédentes
+1. **Créez un template** avec des variables : `Rédige un brief pour {entreprise} sur {sujet}`
+2. **Utilisez le template** : remplissez les variables
+3. **Générez** (streaming temps réel ou mode synchrone)
+4. **Exportez** en Markdown, HTML, PDF ou Word
+5. **Consultez l'historique** pour retrouver, éditer et versionner vos générations
 
 ---
 
-## 🔑 Configuration de la clé API
+## ⚠️ Erreurs fréquentes
 
-Une clé API par défaut est déjà configurée, mais vous pouvez la changer :
+| Erreur | Solution |
+|--------|----------|
+| "Cle API invalide ou expiree" | Vérifiez votre clé dans Configuration > Étape 1 |
+| "Trop de requêtes" | Attendez 1-2 minutes (quota du provider atteint) |
+| "Erreur serveur du provider" | Le provider est temporairement indisponible, réessayez |
+| "Aucun provider configure" | Définissez votre provider/modèle par défaut (Étape 2) |
+| L'app refuse de démarrer en production | Définissez la variable d'environnement `SECRET_KEY` |
 
-1. Cliquez sur "⚙️ Configuration API"
-2. Entrez votre clé API Z.AI
-3. Cliquez sur "Sauvegarder"
+**Guide complet de dépannage** : voir `TROUBLESHOOTING.md` s'il est présent, et le fichier `app.log`.
 
 ---
 
@@ -74,31 +82,13 @@ Une clé API par défaut est déjà configurée, mais vous pouvez la changer :
 
 | Fichier | Utilité |
 |---------|---------|
-| `start.bat` | Script de démarrage facile (double-cliquez) |
-| `app.py` | Application principale |
-| `TROUBLESHOOTING.md` | Guide de résolution des problèmes |
+| `start.bat` | Script de démarrage Windows |
+| `run.py` | Point d'entrée de l'application |
+| `config.py` | Configuration (providers, environnements) |
+| `.env` | Variables d'environnement (SECRET_KEY, ENCRYPTION_KEY...) |
+| `app.log` | Logs applicatifs |
 | `README.md` | Documentation complète |
-| `history.json` | Historique de vos générations |
-| `exports/` | Dossier des fichiers exportés |
 
 ---
 
-## 💡 Astuces
-
-- **Si l'application ne démarre pas** : Vérifiez que Python est installé (`python --version`)
-- **Si vous voyez une erreur** : Consultez le fichier `flask.log` pour les détails
-- **Pour arrêter l'application** : Appuyez sur `Ctrl+C` dans la console
-- **Les cahiers des charges sont sauvegardés** automatiquement dans l'historique
-
----
-
-## 🆘 Besoin d'aide ?
-
-1. **Consultez le guide de dépannage** : `TROUBLESHOOTING.md`
-2. **Vérifiez les logs** : Ouvrez le fichier `flask.log`
-3. **Testez votre connexion** : https://www.speedtest.net
-4. **Vérifiez Z.AI** : https://docs.z.ai
-
----
-
-**Bon développement SaaS ! 🚀**
+**Bon développement ! 🚀**

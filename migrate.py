@@ -13,6 +13,7 @@ This script:
 import os
 import sys
 import json
+import secrets
 import argparse
 import logging
 from datetime import datetime
@@ -28,8 +29,17 @@ def main():
     parser = argparse.ArgumentParser(description='Migrate JSON data to SQLite')
     parser.add_argument('--username', default='admin', help='Admin username')
     parser.add_argument('--email', default='admin@local.app', help='Admin email')
-    parser.add_argument('--password', default='Admin123!', help='Admin password')
+    parser.add_argument('--password', default=None,
+                        help='Admin password (genere aleatoirement si absent)')
     args = parser.parse_args()
+
+    # Jamais d'identifiants par defaut connus : sans --password, on genere
+    # un mot de passe aleatoire affiche une seule fois a la creation
+    password = args.password
+    password_generated = False
+    if not password:
+        password = 'A1!' + secrets.token_urlsafe(12)
+        password_generated = True
 
     from app import create_app, db
     from app.models import User, Template, HistoryEntry, ProviderConfig
@@ -49,12 +59,17 @@ def main():
             user = User(
                 username=args.username,
                 email=args.email,
-                password_hash=hash_password(args.password),
+                password_hash=hash_password(password),
                 is_admin=True,
             )
             db.session.add(user)
             db.session.commit()
-            logger.info('Admin user created: %s / %s', args.username, args.password)
+            logger.info('Admin user created: %s', args.username)
+            if password_generated:
+                # Affiche une seule fois : non journalise ailleurs
+                logger.info('Mot de passe genere (notez-le maintenant) : %s', password)
+            else:
+                logger.info('Mot de passe : celui fourni via --password')
         else:
             logger.info('Admin user already exists: %s', args.username)
 
@@ -80,8 +95,8 @@ def main():
                         description=lt.get('description', ''),
                         content=lt.get('content', ''),
                         variables=lt.get('variables', []),
-                        default_provider=lt.get('default_provider', 'zai'),
-                        default_model=lt.get('default_model', 'glm-4.7'),
+                        default_provider=lt.get('default_provider') or None,
+                        default_model=lt.get('default_model') or None,
                     )
                     db.session.add(tpl)
                     count += 1
@@ -166,7 +181,7 @@ def main():
         logger.info('')
         logger.info('Migration complete!')
         logger.info('Start the app with: python run.py')
-        logger.info('Login with: %s / %s', args.username, args.password)
+        logger.info('Login username: %s', args.username)
 
 
 if __name__ == '__main__':

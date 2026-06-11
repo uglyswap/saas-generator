@@ -3,8 +3,9 @@ import logging
 from flask import Blueprint, request, jsonify, Response, current_app
 from flask_login import login_required, current_user
 
-from app import db
+from app import db, limiter
 from app.models import ProviderConfig, Template, ExportTemplate, User
+from app.services.config_service import get_user_default, get_provider_model_for_user
 from app.utils.security import encrypt_api_key, decrypt_api_key
 from app.utils.validators import (
     validate_api_key,
@@ -13,7 +14,7 @@ from app.utils.validators import (
     safe_substitute,
     extract_variables,
 )
-from app.services.llm_service import call_llm_api, stream_llm_api, fetch_models
+from app.services.llm_service import call_llm_api, stream_llm_api, fetch_models, get_static_models
 from app.services.template_service import (
     get_user_templates,
     get_template,
@@ -40,6 +41,13 @@ from app.services.export_service import (
 
 logger = logging.getLogger(__name__)
 api_v1_bp = Blueprint('api_v1', __name__)
+
+
+def _as_str(value, default: str = '') -> str:
+    """Coerce a JSON value to a stripped string ('' when absent or wrong type)."""
+    if isinstance(value, str):
+        return value.strip()
+    return default
 
 
 # -----------------------------------------------------------------------
@@ -72,13 +80,13 @@ def save_config():
     data = request.get_json(silent=True) or {}
     providers = current_app.config.get('PROVIDERS', {})
 
-    provider_id = data.get('provider', '').strip()
+    provider_id = _as_str(data.get('provider'))
     ok, err = validate_provider_id(provider_id, providers)
     if not ok:
         return jsonify({'error': err}), 400
 
-    api_key = data.get('api_key', '').strip()
-    model_id = data.get('model', '').strip()
+    api_key = _as_str(data.get('api_key'))
+    model_id = _as_str(data.get('model'))
 
     if api_key:
         ok, err = validate_api_key(api_key)
@@ -135,9 +143,9 @@ def save_meta_prompt_config():
     """Save meta-prompt configuration."""
     data = request.get_json(silent=True) or {}
 
-    meta_prompt = data.get('meta_prompt', '').strip()
-    provider_id = data.get('provider', '').strip()
-    model_id = data.get('model', '').strip()
+    meta_prompt = _as_str(data.get('meta_prompt'))
+    provider_id = _as_str(data.get('provider'))
+    model_id = _as_str(data.get('model'))
 
     if meta_prompt and len(meta_prompt) > 50000:
         return jsonify({'error': 'Le meta-prompt est trop long (max 50000 caracteres)'}), 400
@@ -162,12 +170,13 @@ def save_meta_prompt_config():
 
 @api_v1_bp.route('/generate/template-content', methods=['POST'])
 @login_required
+@limiter.limit('30 per minute')
 def generate_template_content():
     """Generate template content using the meta-prompt and AI."""
     data = request.get_json(silent=True) or {}
 
-    template_name = data.get('name', '').strip()
-    template_description = data.get('description', '').strip()
+    template_name = _as_str(data.get('name'))
+    template_description = _as_str(data.get('description'))
 
     if not template_name:
         return jsonify({'error': 'Le nom du template est requis'}), 400
@@ -181,8 +190,10 @@ def generate_template_content():
     if not meta_prompt_text:
         return jsonify({'error': 'Aucun meta-prompt configure'}), 400
 
-    # Determine provider and model
+    # Determine provider and model (meme chaine de fallback que la generation)
     provider_id = user.meta_prompt_provider or user.default_provider or ''
+    if not provider_id:
+        provider_id = get_user_default(current_user.id)[0] or ''
     model_id = user.meta_prompt_model or ''
 
     if not provider_id:
@@ -206,7 +217,7 @@ def generate_template_content():
 
     # Fallback model
     if not model_id:
-        model_id = pc.selected_model or providers[provider_id].get('default_model', '')
+        model_id = get_provider_model_for_user(current_user.id, provider_id)
     if not model_id:
         return jsonify({'error': 'Aucun modele configure'}), 400
 
@@ -219,9 +230,9 @@ def generate_template_content():
     })
 
     # Call LLM (synchronous - template content is short)
-    result, error = call_llm_api(prompt, provider_id, model_id, api_key)
+    result, error, status = call_llm_api(prompt, provider_id, model_id, api_key)
     if error:
-        return jsonify({'error': error}), 500
+        return jsonify({'error': error}), status
 
     return jsonify({'success': True, 'content': result})
 
@@ -243,7 +254,13 @@ def get_provider_models(provider_id: str):
         user_id=current_user.id, provider_id=provider_id
     ).first()
 
-    models = (pc.models_cache if pc else []) or []
+    # Provider sans endpoint /models (ex. Alibaba Coding Plan) : la liste statique
+    # embarquee fait foi, un cache perime ne doit pas la masquer
+    if not providers[provider_id].get('models_url'):
+        return jsonify({'models': get_static_models(provider_id)})
+
+    # Cache utilisateur, sinon liste statique embarquee (premier usage d'un provider)
+    models = (pc.models_cache if pc else []) or get_static_models(provider_id)
     return jsonify({'models': models})
 
 
@@ -287,19 +304,31 @@ def list_templates():
 @api_v1_bp.route('/templates', methods=['POST'])
 @login_required
 def create_template_api():
-    """Create a new template."""
+    """Create a new template. Provider/model are optional per-template overrides."""
     data = request.get_json(silent=True) or {}
+
+    default_provider = _as_str(data.get('default_provider'))
+    if default_provider:
+        ok, err = validate_provider_id(default_provider, current_app.config.get('PROVIDERS', {}))
+        if not ok:
+            return jsonify({'error': err}), 400
+
     tpl, err = create_template(
         user_id=current_user.id,
-        name=data.get('name', ''),
-        content=data.get('content', ''),
-        description=data.get('description', ''),
-        default_provider=data.get('default_provider', 'zai'),
-        default_model=data.get('default_model', 'glm-4.7'),
+        name=_as_str(data.get('name')),
+        content=_as_str(data.get('content')),
+        description=_as_str(data.get('description')),
+        default_provider=default_provider,
+        default_model=_as_str(data.get('default_model')),
     )
     if err:
         return jsonify({'error': err}), 400
     return jsonify({'success': True, 'template': tpl.to_dict()}), 201
+
+
+# Champs modifiables d'un template : seules ces cles sont transmises au service
+# (jamais **data brut, qui permettrait d'ecraser template_id/user_id)
+_TEMPLATE_UPDATE_FIELDS = ('name', 'content', 'description', 'default_provider', 'default_model')
 
 
 @api_v1_bp.route('/templates/<int:template_id>', methods=['PUT'])
@@ -307,7 +336,21 @@ def create_template_api():
 def update_template_api(template_id: int):
     """Update an existing template."""
     data = request.get_json(silent=True) or {}
-    tpl, err = update_template(template_id, current_user.id, **data)
+
+    fields = {}
+    for key in _TEMPLATE_UPDATE_FIELDS:
+        if key in data:
+            value = data[key]
+            if value is not None and not isinstance(value, str):
+                return jsonify({'error': f'Champ {key} invalide : chaine attendue'}), 400
+            fields[key] = value or ''
+
+    if fields.get('default_provider'):
+        ok, err = validate_provider_id(fields['default_provider'].strip(), current_app.config.get('PROVIDERS', {}))
+        if not ok:
+            return jsonify({'error': err}), 400
+
+    tpl, err = update_template(template_id, current_user.id, **fields)
     if err:
         status = 404 if 'non trouve' in err else 400
         return jsonify({'error': err}), status
@@ -330,11 +373,15 @@ def delete_template_api(template_id: int):
 
 def _prepare_generation(data: dict):
     """Shared validation for generate and generate/stream. Returns tuple or error response."""
-    template_id = data.get('template_id')
-    if not template_id:
+    raw_template_id = data.get('template_id')
+    if raw_template_id is None or raw_template_id == '':
         return None, (jsonify({'error': 'ID de template manquant'}), 400)
+    try:
+        template_id = int(raw_template_id)
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': 'ID de template invalide'}), 400)
 
-    tpl = get_template(int(template_id), current_user.id)
+    tpl = get_template(template_id, current_user.id)
     if not tpl:
         return None, (jsonify({'error': 'Template non trouve'}), 404)
 
@@ -344,13 +391,37 @@ def _prepare_generation(data: dict):
     if not ok:
         return None, (jsonify({'error': err}), 400)
 
-    provider_id = data.get('provider') or tpl.default_provider or 'zai'
-    model_id = data.get('model') or tpl.default_model or 'glm-4.7'
+    # Resolution du couple (provider, modele) :
+    # 1. choix explicite de la requete
+    # 2. override du template (s'il en a un)
+    # 3. defaut general de l'utilisateur
+    # Le modele du template n'est repris que si le provider resolu correspond
+    # au provider du template (sinon on enverrait un modele au mauvais provider).
+    provider_id = _as_str(data.get('provider')) or tpl.default_provider or ''
+    model_id = _as_str(data.get('model'))
+    if not model_id and tpl.default_model and tpl.default_provider and provider_id == tpl.default_provider:
+        model_id = tpl.default_model
+
+    if not provider_id:
+        # Le modele du defaut general sera resolu plus bas par
+        # get_provider_model_for_user (meme logique, une seule source)
+        provider_id = get_user_default(current_user.id)[0] or ''
+
+    if not provider_id:
+        return None, (jsonify({
+            'error': "Aucun provider configure. Choisissez un provider et un modele "
+                     "par defaut dans le panneau Configuration."
+        }), 400)
 
     providers = current_app.config.get('PROVIDERS', {})
     ok, err = validate_provider_id(provider_id, providers)
     if not ok:
         return None, (jsonify({'error': err}), 400)
+
+    if not model_id:
+        model_id = get_provider_model_for_user(current_user.id, provider_id)
+    if not model_id:
+        return None, (jsonify({'error': 'Aucun modele configure pour ce provider'}), 400)
 
     pc = ProviderConfig.query.filter_by(
         user_id=current_user.id, provider_id=provider_id
@@ -362,6 +433,12 @@ def _prepare_generation(data: dict):
         }), 400)
 
     api_key = decrypt_api_key(pc.api_key_encrypted)
+    if not api_key:
+        # Valeur chiffree presente mais indechiffrable : SECRET_KEY/ENCRYPTION_KEY a change
+        return None, (jsonify({
+            'error': f'Cle API illisible pour {providers[provider_id]["name"]} '
+                     f'(cle de chiffrement modifiee ?). Re-saisissez votre cle API.'
+        }), 400)
     prompt = safe_substitute(tpl.content, variables)
 
     return {
@@ -376,6 +453,7 @@ def _prepare_generation(data: dict):
 
 @api_v1_bp.route('/generate', methods=['POST'])
 @login_required
+@limiter.limit('30 per minute')
 def generate():
     """Generate result from template (synchronous)."""
     data = request.get_json(silent=True) or {}
@@ -383,11 +461,11 @@ def generate():
     if error_resp:
         return error_resp
 
-    result, error = call_llm_api(
+    result, error, status = call_llm_api(
         ctx['prompt'], ctx['provider_id'], ctx['model_id'], ctx['api_key']
     )
     if error:
-        return jsonify({'error': error}), 500
+        return jsonify({'error': error}), status
 
     entry = create_history_entry(
         user_id=current_user.id,
@@ -403,6 +481,7 @@ def generate():
 
 @api_v1_bp.route('/generate/stream', methods=['POST'])
 @login_required
+@limiter.limit('30 per minute')
 def generate_stream():
     """Generate result with Server-Sent Events streaming."""
     import json as _json
@@ -473,14 +552,15 @@ def generate_stream():
 
 @api_v1_bp.route('/generate/partial', methods=['POST'])
 @login_required
+@limiter.limit('30 per minute')
 def generate_partial():
     """Regenerate a selected section of text."""
     data = request.get_json(silent=True) or {}
-    selected_text = data.get('selected_text', '').strip()
-    full_context = data.get('full_context', '').strip()
+    selected_text = _as_str(data.get('selected_text'))
+    full_context = _as_str(data.get('full_context'))
     template_id = data.get('template_id')
-    provider_id = data.get('provider', '')
-    model_id = data.get('model', '')
+    provider_id = _as_str(data.get('provider'))
+    model_id = _as_str(data.get('model'))
 
     if not selected_text:
         return jsonify({'error': 'Aucun texte selectionne'}), 400
@@ -509,9 +589,9 @@ def generate_partial():
         f"{selected_text}"
     )
 
-    result, error = call_llm_api(prompt, provider_id, model_id, api_key)
+    result, error, status = call_llm_api(prompt, provider_id, model_id, api_key)
     if error:
-        return jsonify({'error': error}), 500
+        return jsonify({'error': error}), status
 
     return jsonify({'success': True, 'replacement': result})
 
@@ -680,16 +760,16 @@ def list_export_templates():
 def create_export_template():
     """Create a new export template."""
     data = request.get_json(silent=True) or {}
-    name = data.get('name', '').strip()
+    name = _as_str(data.get('name'))
     if not name:
         return jsonify({'error': 'Nom requis'}), 400
 
     tpl = ExportTemplate(
         user_id=current_user.id,
         name=name,
-        header_text=data.get('header_text', '').strip(),
-        footer_text=data.get('footer_text', '').strip(),
-        primary_color=data.get('primary_color', '#2563eb').strip(),
+        header_text=_as_str(data.get('header_text')),
+        footer_text=_as_str(data.get('footer_text')),
+        primary_color=_as_str(data.get('primary_color')) or '#2563eb',
     )
     db.session.add(tpl)
     db.session.commit()
@@ -706,13 +786,16 @@ def update_export_template(tpl_id: int):
 
     data = request.get_json(silent=True) or {}
     if 'name' in data:
-        tpl.name = data['name'].strip()
+        new_name = _as_str(data['name'])
+        if not new_name:
+            return jsonify({'error': 'Nom invalide'}), 400
+        tpl.name = new_name
     if 'header_text' in data:
-        tpl.header_text = data['header_text'].strip()
+        tpl.header_text = _as_str(data['header_text'])
     if 'footer_text' in data:
-        tpl.footer_text = data['footer_text'].strip()
+        tpl.footer_text = _as_str(data['footer_text'])
     if 'primary_color' in data:
-        tpl.primary_color = data['primary_color'].strip()
+        tpl.primary_color = _as_str(data['primary_color']) or '#2563eb'
 
     db.session.commit()
     return jsonify({'success': True, 'template': tpl.to_dict()})

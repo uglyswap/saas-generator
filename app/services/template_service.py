@@ -29,15 +29,26 @@ def get_template(template_id: int, user_id: int) -> Optional[Template]:
     return Template.query.filter_by(id=template_id, user_id=user_id).first()
 
 
+def _clean_override(value) -> Optional[str]:
+    """Normalize a per-template provider/model override: empty -> None (use general default)."""
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
 def create_template(
     user_id: int,
     name: str,
     content: str,
     description: str = '',
-    default_provider: str = 'zai',
-    default_model: str = 'glm-4.7',
+    default_provider: str = '',
+    default_model: str = '',
 ) -> Tuple[Optional[Template], Optional[str]]:
-    """Create a new template. Returns (template, error)."""
+    """Create a new template. Returns (template, error).
+
+    default_provider/default_model are optional overrides: when empty, the
+    user's general default applies at generation time.
+    """
     ok, err = validate_template_name(name)
     if not ok:
         return None, err
@@ -56,8 +67,8 @@ def create_template(
         description=(description or '').strip(),
         content=content.strip(),
         variables=variables,
-        default_provider=default_provider,
-        default_model=default_model,
+        default_provider=_clean_override(default_provider),
+        default_model=_clean_override(default_model),
     )
     db.session.add(tpl)
     db.session.commit()
@@ -95,9 +106,9 @@ def update_template(
         tpl.description = (kwargs['description'] or '').strip()
 
     if 'default_provider' in kwargs:
-        tpl.default_provider = kwargs['default_provider']
+        tpl.default_provider = _clean_override(kwargs['default_provider'])
     if 'default_model' in kwargs:
-        tpl.default_model = kwargs['default_model']
+        tpl.default_model = _clean_override(kwargs['default_model'])
 
     db.session.commit()
     logger.info('Template updated: id=%d user=%d', tpl.id, user_id)

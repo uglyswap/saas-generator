@@ -1,18 +1,20 @@
 # SaaS Generator
 
-Application Flask pour generer du contenu avec des templates de prompts personnalises, propulsee par des modeles LLM (Z.AI GLM, OpenRouter).
+Application Flask pour generer du contenu avec des templates de prompts personnalises, propulsee par des modeles LLM (Z.AI Coding Plan, OpenRouter, Alibaba Cloud Coding Plan, OpenCode Go).
 
 ## Fonctionnalites
 
 ### Gestion des Templates
 - Creation, modification et suppression de templates de prompts
 - Variables dynamiques avec syntaxe `{variable_name}`
-- Association d'un provider et modele par defaut par template
+- Modele par defaut general (compte) avec override optionnel par template :
+  un template sans choix explicite suit toujours le defaut general
 - Generation automatique de contenu de template via IA (meta-prompt)
 
 ### Generation de Contenu
 - Appels synchrones et en streaming (Server-Sent Events)
-- Support multi-provider (Z.AI Coding Plan, OpenRouter)
+- Support multi-provider (Z.AI Coding Plan, OpenRouter, Alibaba Cloud Coding Plan, OpenCode Go)
+- Routage automatique OpenAI-compatible / Anthropic-compatible selon le modele (OpenCode Go)
 - Regeneration partielle de sections selectionnees
 - Historique complet des generations avec pagination
 
@@ -30,9 +32,13 @@ Application Flask pour generer du contenu avec des templates de prompts personna
 
 ### Securite
 - Authentification utilisateur (inscription, connexion)
-- Chiffrement AES des cles API
+- Chiffrement AES (Fernet) des cles API
 - Protection CSRF
-- Validation des entrees
+- Validation des entrees (types JSON inclus)
+- Rate limiting (login, inscription, generation)
+- Refus de demarrer en production sans SECRET_KEY fort
+- Sanitisation DOMPurify des sorties LLM rendues
+- Cookies de session durcis (Secure, HttpOnly, SameSite)
 
 ### Interface
 - Mode sombre / clair
@@ -41,10 +47,16 @@ Application Flask pour generer du contenu avec des templates de prompts personna
 
 ## Providers Supportes
 
-| Provider | Endpoint | Modeles |
-|----------|----------|---------|
-| Z.AI Coding Plan | `https://api.z.ai/api/coding/paas/v4/` | GLM-4.7, GLM-5, GLM-4.6, GLM-4.5 |
-| OpenRouter | `https://openrouter.ai/api/v1/` | Claude, GPT, Gemini, etc. |
+| Provider | Endpoint | Modeles (juin 2026) |
+|----------|----------|---------------------|
+| Z.AI Coding Plan | `https://api.z.ai/api/coding/paas/v4/` | glm-4.5-air, glm-4.7, glm-5, glm-5-turbo, glm-5.1 |
+| OpenRouter | `https://openrouter.ai/api/v1/` | Claude, GPT, Gemini, etc. (liste dynamique) |
+| Alibaba Cloud Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/v1/` | qwen3.7-plus, qwen3.6-plus, qwen3.5-plus, qwen3-max-2026-01-23, qwen3-coder-plus, qwen3-coder-next, glm-5, glm-4.7, kimi-k2.5, MiniMax-M2.5 |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/` | glm-5.1, glm-5, kimi-k2.5/k2.6, deepseek-v4-pro/flash, mimo-v2.x, minimax-m2.5/m2.7/m3, qwen3.5/3.6/3.7-plus, qwen3.7-max, hy3-preview |
+
+Notes :
+- Alibaba Coding Plan : pas d'endpoint `GET /models`, la liste est embarquee (IDs sensibles a la casse, ex. `MiniMax-M2.5`).
+- OpenCode Go : les familles MiniMax et Qwen passent par l'endpoint Anthropic `/messages` (header `x-api-key`), les autres par `/chat/completions` (header `Authorization: Bearer`). Le routage est automatique.
 
 ## Installation
 
@@ -96,10 +108,11 @@ docker-compose up -d
 
 | Variable | Description | Defaut |
 |----------|-------------|--------|
-| `SECRET_KEY` | Cle secrete Flask | `dev-change-me-in-production` |
+| `SECRET_KEY` | Cle secrete Flask (OBLIGATOIRE en production : l'app refuse de demarrer avec la valeur par defaut) | `dev-change-me-in-production` |
 | `DATABASE_URL` | URL de connexion BD | `sqlite:///saas_generator.db` |
 | `FLASK_ENV` | Environnement | `production` |
-| `ENCRYPTION_KEY` | Cle de chiffrement AES (32 chars) | - |
+| `ENCRYPTION_KEY` | Cle Fernet pour le chiffrement des cles API (derivee de SECRET_KEY si absente) | - |
+| `SESSION_COOKIE_SECURE` | Cookies servis uniquement en HTTPS (production) | `true` |
 
 ### Fichier .env exemple
 
@@ -121,7 +134,8 @@ saas-generator/
 │   ├── models.py            # Modeles SQLAlchemy
 │   ├── views.py             # Routes web
 │   ├── services/
-│   │   ├── llm_service.py   # Appels LLM
+│   │   ├── llm_service.py   # Appels LLM (OpenAI + Anthropic compat)
+│   │   ├── config_service.py # Resolution du defaut general provider/modele
 │   │   ├── template_service.py
 │   │   ├── history_service.py
 │   │   └── export_service.py
@@ -222,10 +236,13 @@ docker-compose up -d
 
 ### Checklist Production
 
-- [ ] Definir `SECRET_KEY` securise
+- [ ] Definir `SECRET_KEY` securise (l'app refuse de demarrer avec un placeholder connu)
 - [ ] Utiliser PostgreSQL (pas SQLite)
-- [ ] Configurer HTTPS
-- [ ] Definir `ENCRYPTION_KEY` pour les cles API
+- [ ] Configurer HTTPS (sinon mettre `SESSION_COOKIE_SECURE=false`, deconseille)
+- [ ] Definir `ENCRYPTION_KEY` pour les cles API (attention : changer `SECRET_KEY` sans
+      `ENCRYPTION_KEY` definie invalide les cles API stockees, a re-saisir dans l'UI)
+- [ ] Derriere un reverse proxy : `TRUST_PROXY=true` (rate limiting par IP client reelle)
+- [ ] En multi-workers : `RATELIMIT_STORAGE_URI=redis://...` pour des limites globales exactes
 - [ ] Configurer les sauvegardes DB
 - [ ] Limiter les logs sensibles
 

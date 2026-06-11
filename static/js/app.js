@@ -173,7 +173,9 @@ const App = (() => {
                 try { hljs.highlightElement(code); } catch {}
             }
         } else if (markdownReady) {
-            element.innerHTML = marked.parse(raw || '');
+            const parsed = marked.parse(raw || '');
+            // Sanitisation : la sortie LLM est du contenu non fiable injecte via innerHTML
+            element.innerHTML = (typeof DOMPurify !== 'undefined') ? DOMPurify.sanitize(parsed) : parsed;
             element.classList.remove('markdown', 'html-content');
             element.classList.add('rendered-markdown');
             // Render mermaid diagrams
@@ -536,19 +538,30 @@ const App = (() => {
     // Provider & Model Management (shared)
     // ---------------------------------------------------------------
 
+    // Tri alphabetique par nom affiche (fallback : id)
+    function sortModels(models) {
+        return models.sort((a, b) =>
+            (a.name || a.id || '').localeCompare(b.name || b.id || '', undefined, { sensitivity: 'base' })
+        );
+    }
+
+    function renderModelOptions(modelSelect, models, selectedModelId) {
+        modelSelect.innerHTML = sortModels(models).map(m =>
+            `<option value="${escapeHtml(m.id)}" ${m.id === selectedModelId ? 'selected' : ''}>` +
+            `${escapeHtml(m.name)}${m.description ? ' - ' + escapeHtml(m.description.substring(0, 60)) : ''}</option>`
+        ).join('');
+    }
+
     async function loadProviderModels(providerId, selectedModelId, selectEl) {
         const modelSelect = selectEl || document.getElementById('modelSelect');
         if (!modelSelect) return;
+        modelSelect.disabled = false;
         modelSelect.innerHTML = '<option value="">Chargement...</option>';
 
         try {
             const { ok, data } = await apiFetch(`/api/v1/providers/${providerId}/models`);
             if (ok && data.models && data.models.length > 0) {
-                const models = data.models.sort((a, b) => a.id.localeCompare(b.id));
-                modelSelect.innerHTML = models.map(m =>
-                    `<option value="${escapeHtml(m.id)}" ${m.id === selectedModelId ? 'selected' : ''}>` +
-                    `${escapeHtml(m.name)}${m.description ? ' - ' + escapeHtml(m.description.substring(0, 60)) : ''}</option>`
-                ).join('');
+                renderModelOptions(modelSelect, data.models, selectedModelId);
             } else {
                 modelSelect.innerHTML = '<option value="">Aucun modele - configurez votre cle API</option>';
             }
@@ -560,16 +573,16 @@ const App = (() => {
     async function refreshProviderModels(providerId, selectEl) {
         const modelSelect = selectEl || document.getElementById('modelSelect');
         if (!modelSelect) return;
+        const previousModel = modelSelect.value;
+        modelSelect.disabled = false;
         modelSelect.innerHTML = '<option value="">Rafraichissement...</option>';
 
         try {
             const { ok, data } = await apiFetch(`/api/v1/providers/${providerId}/refresh`, { method: 'POST' });
             if (ok && data.models) {
-                const models = data.models.sort((a, b) => a.id.localeCompare(b.id));
-                modelSelect.innerHTML = models.map(m =>
-                    `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`
-                ).join('');
-                showToast(`${models.length} modeles charges`, 'success');
+                // Conserve la selection courante si le modele existe toujours
+                renderModelOptions(modelSelect, data.models, previousModel);
+                showToast(`${data.models.length} modeles charges`, 'success');
             } else {
                 modelSelect.innerHTML = '<option value="">Erreur</option>';
                 showToast(data.error || 'Erreur lors du rafraichissement', 'error');
@@ -578,6 +591,13 @@ const App = (() => {
             modelSelect.innerHTML = '<option value="">Erreur de connexion</option>';
             showToast('Erreur de connexion', 'error');
         }
+    }
+
+    // Etat "defaut general" du select de modele (formulaire template)
+    function setModelSelectGeneralDefault(modelSelect) {
+        if (!modelSelect) return;
+        modelSelect.innerHTML = '<option value="">Defaut general du compte</option>';
+        modelSelect.disabled = true;
     }
 
     async function saveProviderConfig(providerId, apiKey, modelId) {
@@ -1123,14 +1143,21 @@ const App = (() => {
         const modelSelect = document.getElementById('defaultModel');
         const contentArea = document.getElementById('templateContent');
 
-        // Load models for the default provider
-        const defaultPid = templateData?.default_provider || config.selected_provider || 'zai';
-        const defaultModel = templateData?.default_model || config.selected_model || null;
-        loadProviderModels(defaultPid, defaultModel, modelSelect);
+        // Override par template optionnel : provider vide = defaut general du compte
+        const overridePid = templateData?.default_provider || '';
+        if (overridePid) {
+            loadProviderModels(overridePid, templateData?.default_model || null, modelSelect);
+        } else {
+            setModelSelectGeneralDefault(modelSelect);
+        }
 
         if (providerSelect) {
             providerSelect.addEventListener('change', () => {
-                loadProviderModels(providerSelect.value, null, modelSelect);
+                if (providerSelect.value) {
+                    loadProviderModels(providerSelect.value, null, modelSelect);
+                } else {
+                    setModelSelectGeneralDefault(modelSelect);
+                }
             });
         }
 
@@ -1150,8 +1177,9 @@ const App = (() => {
                 e.preventDefault();
                 const formData = new FormData(form);
                 const body = Object.fromEntries(formData);
-                body.default_provider = providerSelect?.value || 'zai';
-                body.default_model = modelSelect?.value || '';
+                // Vide = pas d'override : le defaut general du compte s'applique
+                body.default_provider = providerSelect?.value || '';
+                body.default_model = providerSelect?.value ? (modelSelect?.value || '') : '';
 
                 const url = templateId ? `/api/v1/templates/${templateId}` : '/api/v1/templates';
                 const method = templateId ? 'PUT' : 'POST';
@@ -1194,9 +1222,15 @@ const App = (() => {
 
         const providerSelect = document.getElementById('providerSelect');
         const modelSelect = document.getElementById('modelSelect');
-        const defaultPid = template.default_provider || config.selected_provider || 'zai';
-        const defaultModel = template.default_model || config.selected_model || '';
-        loadProviderModels(defaultPid, defaultModel, modelSelect);
+        // Override du template s'il existe, sinon defaut general du compte.
+        // Le modele du template n'est repris que si son provider est utilise.
+        const defaultPid = template.default_provider || config.selected_provider || '';
+        const defaultModel = (template.default_provider ? template.default_model : config.selected_model) || '';
+        if (defaultPid) {
+            loadProviderModels(defaultPid, defaultModel, modelSelect);
+        } else if (modelSelect) {
+            modelSelect.innerHTML = '<option value="">Aucun provider configure</option>';
+        }
 
         if (providerSelect) {
             providerSelect.addEventListener('change', () => {

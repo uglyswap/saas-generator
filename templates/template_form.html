@@ -57,30 +57,28 @@
                 <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Utilisez le format {variable} pour definir des variables. Ex: {idee}, {budget}, {date}</p>
             </div>
 
-            <!-- Provider -->
+            <!-- Provider (override optionnel : vide = defaut general du compte) -->
             <div>
-                <label for="defaultProvider" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Provider par defaut</label>
+                <label for="defaultProvider" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Provider pour ce template</label>
                 <select id="defaultProvider" name="default_provider"
                         class="w-full px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
+                    <option value="" {% if not template or not template.default_provider %}selected{% endif %}>Defaut general du compte (recommande)</option>
                     {% for pid, pinfo in config.providers.items() %}
                     <option value="{{ pid }}"
-                        {% if template %}
-                            {% if template.default_provider == pid %}selected{% endif %}
-                        {% else %}
-                            {% if config.selected_provider == pid %}selected{% endif %}
-                        {% endif %}>
+                        {% if template and template.default_provider == pid %}selected{% endif %}>
                         {{ pinfo.name }}
                     </option>
                     {% endfor %}
                 </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Laissez "Defaut general" pour que ce template suive le modele configure dans la page d'accueil &gt; Configuration.</p>
             </div>
 
             <!-- Model -->
             <div>
-                <label for="defaultModel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Modele par defaut</label>
+                <label for="defaultModel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Modele pour ce template</label>
                 <select id="defaultModel" name="default_model"
                         class="w-full px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm">
-                    <option value="">Chargement...</option>
+                    <option value="">Defaut general du compte</option>
                 </select>
             </div>
 

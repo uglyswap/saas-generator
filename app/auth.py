@@ -3,7 +3,7 @@ import logging
 from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_user, logout_user, login_required, current_user
 
-from app import db
+from app import db, limiter
 from app.models import User
 from app.utils.security import hash_password, check_password
 from app.utils.validators import validate_username, validate_email, validate_password
@@ -86,6 +86,7 @@ def login():
 
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit('10 per minute')
 def login_post():
     """Handle login."""
     username = request.form.get('username', '').strip()
@@ -103,8 +104,13 @@ def login_post():
     login_user(user, remember=remember)
     logger.info('User logged in: %s', user.username)
 
-    next_page = request.args.get('next')
-    if next_page and next_page.startswith('/'):
+    # N'accepter que les chemins relatifs internes : '//evil.com', '/\evil.com'
+    # et les caracteres de controle (le navigateur retire TAB/CR/LF d'une URL,
+    # ex. '/%09/evil.com' redevient '//evil.com') sont des open redirects
+    next_page = request.args.get('next', '')
+    if (next_page.startswith('/')
+            and not next_page.startswith(('//', '/\\'))
+            and not any(ord(c) < 0x20 for c in next_page)):
         return redirect(next_page)
     return redirect(url_for('views.index'))
 
@@ -118,6 +124,7 @@ def register():
 
 
 @auth_bp.route('/register', methods=['POST'])
+@limiter.limit('5 per hour')
 def register_post():
     """Handle registration."""
     username = request.form.get('username', '').strip()
