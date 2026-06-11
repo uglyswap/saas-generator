@@ -9,6 +9,17 @@ from flask import current_app
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_VERSION = '2023-06-01'
+# Timeout de connexion : court (le provider doit accepter la connexion vite)
+CONNECT_TIMEOUT = 15
+
+
+def _request_timeout() -> tuple:
+    """(connect, read) : le read s'applique entre deux chunks, pas au stream entier."""
+    return (CONNECT_TIMEOUT, int(current_app.config.get('LLM_REQUEST_TIMEOUT', 300)))
+
+
+def _max_tokens() -> int:
+    return int(current_app.config.get('LLM_MAX_TOKENS', 16384))
 
 # Provider-specific parameters added to every OpenAI-format request
 _PROVIDER_PARAMS: Dict[str, dict] = {
@@ -121,7 +132,7 @@ def _build_request(
         }
         payload: Dict[str, Any] = {
             'model': model_id,
-            'max_tokens': 8192,
+            'max_tokens': _max_tokens(),
             'temperature': 0.7,
             'top_p': 0.95,
             'messages': [{'role': 'user', 'content': prompt}],
@@ -136,7 +147,7 @@ def _build_request(
             'model': model_id,
             'messages': [{'role': 'user', 'content': prompt}],
             'temperature': 0.7,
-            'max_tokens': 8192,
+            'max_tokens': _max_tokens(),
             'top_p': 0.95,
         }
         payload.update(_PROVIDER_PARAMS.get(provider_id, {}))
@@ -147,7 +158,11 @@ def _build_request(
 
 
 def _extract_content(data: dict, api_format: str) -> str:
-    """Extract assistant text from a non-streaming API response."""
+    """Extract assistant text from a non-streaming API response.
+
+    Le raisonnement (reasoning_content) n'est volontairement PAS utilise comme
+    fallback : c'est du thinking, pas la reponse (meme politique que le stream).
+    """
     if api_format == 'anthropic':
         blocks = data.get('content') or []
         return ''.join(
@@ -156,7 +171,7 @@ def _extract_content(data: dict, api_format: str) -> str:
         )
     if 'choices' in data and data['choices']:
         msg = data['choices'][0].get('message', {})
-        return msg.get('content', '') or msg.get('reasoning_content', '')
+        return msg.get('content', '') or ''
     return ''
 
 
@@ -169,7 +184,33 @@ def _http_error_details(exc: http_requests.exceptions.HTTPError) -> Tuple[str, i
         return "Trop de requetes. Patientez quelques instants.", 429
     if status >= 500:
         return "Erreur serveur du provider. Reessayez plus tard.", 502
-    return f"Erreur HTTP {status}", 502
+
+    # 4xx : remonter le message du provider (ex. modele inconnu, max_tokens trop haut),
+    # sinon l'erreur est indebuggable cote utilisateur
+    detail = ''
+    try:
+        body = exc.response.json() if exc.response is not None else {}
+        err = body.get('error')
+        raw = (err.get('message') if isinstance(err, dict) else None) or body.get('message') or ''
+        detail = str(raw)[:200]
+    except Exception:
+        detail = ''
+    message = f"Erreur HTTP {status} du provider"
+    if detail:
+        message += f" : {detail}"
+        if 'max_tokens' in detail:
+            message += " (essayez de reduire LLM_MAX_TOKENS)"
+    return message, 502
+
+
+def _read_timed_out(exc: Exception) -> bool:
+    """True si une ConnectionError requests enveloppe un read timeout urllib3.
+
+    Pendant la consommation d'un stream, requests re-leve ReadTimeoutError en
+    ConnectionError (pas en Timeout) : sans cette detection, le timeout de
+    lecture mid-stream afficherait une erreur technique brute.
+    """
+    return 'Read timed out' in str(exc)
 
 
 def call_llm_api(
@@ -195,7 +236,7 @@ def call_llm_api(
 
     try:
         logger.info('Calling %s model=%s format=%s', provider['name'], model_id, api_format)
-        resp = http_requests.post(url, headers=headers, json=payload, timeout=180)
+        resp = http_requests.post(url, headers=headers, json=payload, timeout=_request_timeout())
         resp.raise_for_status()
         data = resp.json()
 
@@ -205,14 +246,21 @@ def call_llm_api(
             return content, None, 200
         if api_format == 'openai' and 'choices' not in data:
             return None, "Format de reponse invalide", 502
-        return None, "Reponse vide du modele", 502
+        return None, ("Reponse vide du modele (le raisonnement a peut-etre consomme "
+                      "tout le budget LLM_MAX_TOKENS)"), 502
 
+    except http_requests.exceptions.ConnectTimeout:
+        return None, f"Connexion au provider impossible en {CONNECT_TIMEOUT}s. Reessayez.", 504
     except http_requests.exceptions.Timeout:
-        return None, "Delai d'attente depasse (3 minutes). Reessayez.", 504
+        return None, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans reponse "
+                      f"du provider). Reessayez."), 504
     except http_requests.exceptions.HTTPError as exc:
         message, status = _http_error_details(exc)
         return None, message, status
-    except http_requests.exceptions.ConnectionError:
+    except http_requests.exceptions.ConnectionError as exc:
+        if _read_timed_out(exc):
+            return None, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees "
+                          f"du provider). Reessayez."), 504
         return None, "Erreur de connexion. Verifiez votre acces internet.", 502
     except Exception as exc:
         logger.error('Unexpected LLM error: %s', exc, exc_info=True)
@@ -232,20 +280,41 @@ def _stream_error(chunk: dict, api_format: str) -> Optional[str]:
     return None
 
 
-def _stream_token(chunk: dict, api_format: str) -> str:
-    """Extract a text token from a streaming event payload."""
+def _parse_stream_chunk(chunk: dict, api_format: str) -> Dict[str, Any]:
+    """Parse a streaming event into {token, thinking, truncated, stop}.
+
+    Le thinking (chaine de raisonnement des modeles type MiniMax M3, DeepSeek,
+    GLM-5.1...) est separe de la reponse : il est affiche a part cote client et
+    n'est jamais sauvegarde dans l'historique.
+    """
+    result: Dict[str, Any] = {'token': '', 'thinking': '', 'truncated': False, 'stop': False}
+
     if api_format == 'anthropic':
-        if chunk.get('type') == 'content_block_delta':
+        ctype = chunk.get('type')
+        if ctype == 'message_stop':
+            result['stop'] = True
+        elif ctype == 'message_delta':
+            if (chunk.get('delta') or {}).get('stop_reason') == 'max_tokens':
+                result['truncated'] = True
+        elif ctype == 'content_block_delta':
             delta = chunk.get('delta') or {}
             if delta.get('type') == 'text_delta':
-                return delta.get('text', '') or ''
-        return ''
-    delta = chunk.get('choices', [{}])[0].get('delta', {})
-    token = delta.get('content', '') or ''
-    # Fallback to reasoning_content for thinking models
-    if not token:
-        token = delta.get('reasoning_content', '') or ''
-    return token
+                result['token'] = delta.get('text', '') or ''
+            elif delta.get('type') == 'thinking_delta':
+                result['thinking'] = delta.get('thinking', '') or ''
+        return result
+
+    choices = chunk.get('choices') or []
+    if not choices:
+        return result
+    choice = choices[0] or {}
+    if choice.get('finish_reason') == 'length':
+        result['truncated'] = True
+    delta = choice.get('delta') or {}
+    result['token'] = delta.get('content', '') or ''
+    # reasoning_content (DeepSeek, GLM, Kimi) / reasoning (OpenRouter)
+    result['thinking'] = delta.get('reasoning_content', '') or delta.get('reasoning', '') or ''
+    return result
 
 
 def stream_llm_api(
@@ -272,24 +341,25 @@ def stream_llm_api(
     try:
         resp = http_requests.post(
             url, headers=headers, json=payload,
-            stream=True, timeout=180,
+            stream=True, timeout=_request_timeout(),
         )
         resp.raise_for_status()
 
         full_content = ''
+        truncated = False
+        had_thinking = False
         for line in resp.iter_lines():
             if not line:
                 continue
             decoded = line.decode('utf-8')
-            if not decoded.startswith('data: '):
+            # 'data:' sans espace est valide en SSE (certains providers l'emettent)
+            if not decoded.startswith('data:'):
                 continue
-            data_str = decoded[6:].strip()
+            data_str = decoded[5:].strip()
             if data_str == '[DONE]':
                 break
             try:
                 chunk = json.loads(data_str)
-                if api_format == 'anthropic' and chunk.get('type') == 'message_stop':
-                    break
                 # Erreur upstream emise en cours de stream (apres le HTTP 200) :
                 # la propager au client au lieu de terminer sur un faux 'done'
                 upstream_error = _stream_error(chunk, api_format)
@@ -297,23 +367,67 @@ def stream_llm_api(
                     logger.warning('Stream upstream error (%s): %s', provider_id, upstream_error)
                     yield _sse({'type': 'error', 'message': upstream_error})
                     return
-                token = _stream_token(chunk, api_format)
-                if token:
-                    full_content += token
-                    yield _sse({'type': 'token', 'content': token})
+                parsed = _parse_stream_chunk(chunk, api_format)
+                if parsed['truncated']:
+                    truncated = True
+                if parsed['thinking']:
+                    # Raisonnement du modele : affiche a part, jamais dans le resultat
+                    had_thinking = True
+                    yield _sse({'type': 'thinking', 'content': parsed['thinking']})
+                if parsed['token']:
+                    full_content += parsed['token']
+                    yield _sse({'type': 'token', 'content': parsed['token']})
+                if parsed['stop']:
+                    break
             except (json.JSONDecodeError, IndexError, KeyError):
                 continue
 
-        yield _sse({'type': 'done', 'content': full_content})
+        # Stream termine sans aucune reponse : erreur explicite plutot qu'un
+        # faux 'done' vide (toast de succes au-dessus d'un resultat vide)
+        if not full_content:
+            if truncated:
+                message = ("Budget de tokens entierement consomme par le raisonnement "
+                           "du modele : augmentez LLM_MAX_TOKENS")
+            elif had_thinking:
+                message = "Le modele n'a produit que du raisonnement, sans reponse finale. Reessayez."
+            else:
+                message = "Reponse vide du modele"
+            yield _sse({'type': 'error', 'message': message})
+            return
 
+        if truncated:
+            logger.warning('Stream truncated by max_tokens (%s/%s)', provider_id, model_id)
+        yield _sse({'type': 'done', 'content': full_content, 'truncated': truncated})
+
+    except http_requests.exceptions.ConnectTimeout:
+        yield _sse({'type': 'error', 'message': (
+            f"Connexion au provider impossible en {CONNECT_TIMEOUT}s. Reessayez."
+        )})
     except http_requests.exceptions.Timeout:
-        yield _sse({'type': 'error', 'message': "Delai d'attente depasse"})
+        yield _sse({'type': 'error', 'message': (
+            f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees du provider)"
+        )})
     except http_requests.exceptions.HTTPError as exc:
         message, _ = _http_error_details(exc)
         yield _sse({'type': 'error', 'message': message})
+    except http_requests.exceptions.ChunkedEncodingError:
+        yield _sse({'type': 'error', 'message': (
+            "Flux interrompu par le provider (connexion coupee en cours de generation). Reessayez."
+        )})
+    except http_requests.exceptions.ConnectionError as exc:
+        # Pendant iter_lines, un read timeout urllib3 est re-leve en ConnectionError
+        if _read_timed_out(exc):
+            yield _sse({'type': 'error', 'message': (
+                f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees du provider)"
+            )})
+        else:
+            yield _sse({'type': 'error', 'message': (
+                "Connexion au provider perdue en cours de generation. Reessayez."
+            )})
     except Exception as exc:
         logger.error('Stream error: %s', exc, exc_info=True)
-        yield _sse({'type': 'error', 'message': str(exc)})
+        # Jamais de str(exc) brut au client (details techniques dans les logs)
+        yield _sse({'type': 'error', 'message': "Erreur inattendue pendant le streaming. Reessayez."})
 
 
 def _sort_models(models: list) -> list:

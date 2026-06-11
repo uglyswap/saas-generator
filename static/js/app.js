@@ -97,9 +97,27 @@ const App = (() => {
     }
 
     function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
+        // Echappe aussi les guillemets : utilise dans des attributs HTML (value="...")
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Les modales overlay utilisent flex (items-center justify-center) :
+    // forcer display:block casserait le centrage vertical ET horizontal
+    function openModal(modal) {
+        if (!modal) return;
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden'; // pas de scroll de la page derriere l'overlay
+    }
+
+    function closeModal(modal) {
+        if (!modal) return;
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
     }
 
     // ---------------------------------------------------------------
@@ -207,7 +225,10 @@ const App = (() => {
         renderThrottleTimer = setTimeout(() => {
             renderThrottleTimer = null;
             renderContent(raw, element);
-            element.scrollTop = element.scrollHeight;
+            // Suivre le flux dans le conteneur reellement scrollable (le panneau
+            // de la modale) : #resultContent lui-meme n'a pas d'overflow
+            const scroller = element.closest('.overflow-y-auto') || element;
+            scroller.scrollTop = scroller.scrollHeight;
         }, 100);
     }
 
@@ -309,6 +330,20 @@ const App = (() => {
     let editMode = false;
     let lastRawMarkdown = '';
 
+    // Remet l'affichage hors mode edition (nouvelle generation, fermeture modale) :
+    // sinon le stream serait rendu dans un resultContent en display:none
+    function resetEditMode() {
+        editMode = false;
+        const content = document.getElementById('resultContent');
+        const editArea = document.getElementById('editTextarea');
+        const saveEditBtn = document.getElementById('saveEditBtn');
+        const cancelEditBtn = document.getElementById('cancelEditBtn');
+        if (content) content.style.display = 'block';
+        if (editArea) editArea.style.display = 'none';
+        if (saveEditBtn) saveEditBtn.style.display = 'none';
+        if (cancelEditBtn) cancelEditBtn.style.display = 'none';
+    }
+
     function toggleEditMode() {
         const content = document.getElementById('resultContent');
         const editArea = document.getElementById('editTextarea');
@@ -338,7 +373,11 @@ const App = (() => {
     async function saveEdit() {
         const editArea = document.getElementById('editTextarea');
         const content = document.getElementById('resultContent');
-        if (!editArea || !content || !lastEntryId) return;
+        if (!editArea || !content) return;
+        if (!lastEntryId) {
+            showToast('Resultat non sauvegarde en historique (generation interrompue) : utilisez Copier ou relancez', 'error');
+            return;
+        }
 
         const newResult = editArea.value;
         try {
@@ -373,10 +412,11 @@ const App = (() => {
         const content = document.getElementById('resultContent');
         if (!content) return;
 
-        // Create floating button
+        // Create floating button (.partial-regen-btn = position/z-index dans style.css,
+        // le visuel vient des utilitaires Tailwind : les classes .btn n'existent pas ici)
         const floatBtn = document.createElement('button');
         floatBtn.id = 'partialRegenBtn';
-        floatBtn.className = 'btn btn-primary btn-sm partial-regen-btn';
+        floatBtn.className = 'partial-regen-btn inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shadow-lg';
         floatBtn.textContent = 'Regenerer cette section';
         floatBtn.style.display = 'none';
         document.body.appendChild(floatBtn);
@@ -1045,13 +1085,12 @@ const App = (() => {
         const versionsPanel = document.getElementById('historyVersionsPanel');
         if (versionsPanel) loadVersions(entryId, versionsPanel);
 
-        document.getElementById('historyModal').style.display = 'block';
+        openModal(document.getElementById('historyModal'));
         if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     function closeHistoryModal() {
-        const modal = document.getElementById('historyModal');
-        if (modal) modal.style.display = 'none';
+        closeModal(document.getElementById('historyModal'));
     }
 
     function exportHistoryEntry(entryId) {
@@ -1278,7 +1317,8 @@ const App = (() => {
         // Close result modal
         const closeBtn = document.getElementById('closeResultBtn');
         if (closeBtn) closeBtn.addEventListener('click', () => {
-            document.getElementById('resultModal').style.display = 'none';
+            resetEditMode();
+            closeModal(document.getElementById('resultModal'));
         });
 
         // Export dropdown
@@ -1303,6 +1343,7 @@ const App = (() => {
     }
 
     async function generateSync(payload, btn) {
+        lastEntryId = null; // l'ID de la generation precedente ne doit pas survivre
         try {
             const { ok, data } = await apiFetch('/api/v1/generate', { method: 'POST', body: JSON.stringify(payload) });
             if (ok) {
@@ -1322,17 +1363,82 @@ const App = (() => {
         }
     }
 
+    // --- Thinking panel (raisonnement des modeles, affiche a part) ---
+
+    let thinkingRaw = '';
+
+    function resetThinkingPanel() {
+        thinkingRaw = '';
+        const panel = document.getElementById('thinkingPanel');
+        const contentEl = document.getElementById('thinkingContent');
+        const label = document.getElementById('thinkingLabel');
+        if (panel) panel.style.display = 'none';
+        if (contentEl) { contentEl.textContent = ''; contentEl.style.display = 'block'; }
+        if (label) label.textContent = 'Reflexion du modele...';
+    }
+
+    function appendThinking(text) {
+        thinkingRaw += text;
+        const panel = document.getElementById('thinkingPanel');
+        const contentEl = document.getElementById('thinkingContent');
+        const label = document.getElementById('thinkingLabel');
+        if (!panel || !contentEl) return;
+        panel.style.display = 'block';
+        // textContent : le raisonnement est du texte brut non fiable, jamais injecte en HTML
+        contentEl.textContent = thinkingRaw;
+        if (contentEl.style.display === 'none') {
+            // Thinking entrelace apres repli (multi-blocs) : tenir le compteur a jour
+            if (label) label.textContent = `Reflexion en cours (${thinkingRaw.length} caracteres) : cliquer pour afficher`;
+        } else {
+            contentEl.scrollTop = contentEl.scrollHeight;
+        }
+    }
+
+    function collapseThinkingPanel() {
+        const contentEl = document.getElementById('thinkingContent');
+        const label = document.getElementById('thinkingLabel');
+        if (!thinkingRaw || !contentEl) return;
+        contentEl.style.display = 'none';
+        if (label) label.textContent = `Reflexion terminee (${thinkingRaw.length} caracteres) : cliquer pour afficher`;
+    }
+
+    function setupThinkingToggle() {
+        const toggle = document.getElementById('thinkingToggle');
+        if (!toggle || toggle._setup) return;
+        toggle._setup = true;
+        toggle.addEventListener('click', () => {
+            const contentEl = document.getElementById('thinkingContent');
+            const label = document.getElementById('thinkingLabel');
+            if (!contentEl) return;
+            const wasHidden = contentEl.style.display === 'none';
+            contentEl.style.display = wasHidden ? 'block' : 'none';
+            if (label && thinkingRaw) {
+                label.textContent = `Reflexion du modele (${thinkingRaw.length} caracteres) : ` +
+                    (wasHidden ? 'cliquer pour masquer' : 'cliquer pour afficher');
+            }
+            if (wasHidden) contentEl.scrollTop = contentEl.scrollHeight;
+        });
+    }
+
     async function generateWithStreaming(payload, btn) {
         const modal = document.getElementById('resultModal');
         const content = document.getElementById('resultContent');
         const progress = document.getElementById('streamProgress');
         const statusEl = progress?.querySelector('.stream-status');
 
-        modal.style.display = 'block';
+        openModal(modal);
+        resetEditMode();
         content.innerHTML = '';
         content.classList.remove('markdown');
         content.classList.add('rendered-markdown');
         lastRawMarkdown = '';
+        // L'ID d'entree appartient a la generation PRECEDENTE : le garder ferait
+        // ecraser son historique par saveEdit/export si ce stream est interrompu
+        lastEntryId = null;
+        resetThinkingPanel();
+        setupThinkingToggle();
+        const versionsPanel = document.getElementById('versionsPanel');
+        if (versionsPanel) { versionsPanel.style.display = 'none'; versionsPanel.innerHTML = ''; }
         if (progress) progress.style.display = 'flex';
         if (statusEl) statusEl.textContent = 'Generation en cours...';
 
@@ -1365,6 +1471,57 @@ const App = (() => {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let streamFinished = false; // 'done' ou 'error' recu du serveur
+
+            const handleSseLine = (line) => {
+                if (!line.startsWith('data: ')) return;
+                try {
+                    const event = JSON.parse(line.slice(6));
+                    if (event.type === 'token') {
+                        // Premier token de reponse : replier le raisonnement
+                        if (!lastRawMarkdown && thinkingRaw) collapseThinkingPanel();
+                        if (statusEl) statusEl.textContent = 'Generation en cours...';
+                        lastRawMarkdown += event.content;
+                        renderMarkdownThrottled(lastRawMarkdown, content);
+                    } else if (event.type === 'thinking') {
+                        if (statusEl) statusEl.textContent = 'Le modele reflechit...';
+                        appendThinking(event.content || '');
+                    } else if (event.type === 'done') {
+                        streamFinished = true;
+                        lastRawMarkdown = event.content;
+                        flushMarkdownRender(lastRawMarkdown, content);
+                        collapseThinkingPanel();
+                        if (progress) progress.style.display = 'none';
+                        if (editBtn) editBtn.style.display = 'inline-flex';
+                        if (event.truncated) {
+                            showToast('Reponse tronquee : limite de tokens atteinte (LLM_MAX_TOKENS)', 'error');
+                        } else {
+                            showToast('Generation terminee !', 'success');
+                        }
+                    } else if (event.type === 'saved') {
+                        lastEntryId = event.entry_id;
+                        // 'saved' arrive APRES 'done' : c'est ici que l'entry_id est connu
+                        const versionsPanel = document.getElementById('versionsPanel');
+                        if (versionsPanel) loadVersions(lastEntryId, versionsPanel);
+                    } else if (event.type === 'error') {
+                        streamFinished = true;
+                        if (progress) progress.style.display = 'none';
+                        if (lastRawMarkdown) {
+                            // Rendre les derniers tokens recus (le throttle peut en retenir)
+                            collapseThinkingPanel();
+                            flushMarkdownRender(lastRawMarkdown, content);
+                            if (editBtn) editBtn.style.display = 'inline-flex';
+                            showToast((event.message || 'Erreur') + ' (contenu partiel affiche)', 'error');
+                        } else {
+                            // Pas de reponse : laisser le raisonnement deplie,
+                            // c'est la seule sortie que l'utilisateur peut consulter
+                            showToast(event.message || 'Erreur', 'error');
+                        }
+                    } else if (event.type === 'start') {
+                        if (statusEl) statusEl.textContent = event.message;
+                    }
+                } catch { /* ignore malformed events */ }
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -1373,32 +1530,25 @@ const App = (() => {
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n\n');
                 buffer = lines.pop();
+                for (const line of lines) handleSseLine(line);
+            }
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    try {
-                        const event = JSON.parse(line.slice(6));
-                        if (event.type === 'token') {
-                            lastRawMarkdown += event.content;
-                            renderMarkdownThrottled(lastRawMarkdown, content);
-                        } else if (event.type === 'done') {
-                            lastRawMarkdown = event.content;
-                            flushMarkdownRender(lastRawMarkdown, content);
-                            if (progress) progress.style.display = 'none';
-                            if (editBtn) editBtn.style.display = 'inline-flex';
-                            showToast('Generation terminee !', 'success');
-                            // Load versions
-                            const versionsPanel = document.getElementById('versionsPanel');
-                            if (versionsPanel && lastEntryId) loadVersions(lastEntryId, versionsPanel);
-                        } else if (event.type === 'saved') {
-                            lastEntryId = event.entry_id;
-                        } else if (event.type === 'error') {
-                            if (progress) progress.style.display = 'none';
-                            showToast(event.message || 'Erreur', 'error');
-                        } else if (event.type === 'start') {
-                            if (statusEl) statusEl.textContent = event.message;
-                        }
-                    } catch { /* ignore malformed events */ }
+            // Flush final : octets multi-octets en attente + dernier event complet
+            // mais non suivi de son delimiteur \n\n (flux tronque par un intermediaire)
+            buffer += decoder.decode();
+            for (const line of buffer.split('\n\n')) handleSseLine(line);
+
+            // Stream termine sans evenement 'done'/'error' (connexion coupee,
+            // worker recycle...) : ne pas laisser le spinner tourner indefiniment
+            if (!streamFinished) {
+                if (progress) progress.style.display = 'none';
+                collapseThinkingPanel();
+                if (lastRawMarkdown) {
+                    flushMarkdownRender(lastRawMarkdown, content);
+                    if (editBtn) editBtn.style.display = 'inline-flex';
+                    showToast('Generation interrompue : contenu partiel affiche (non sauvegarde)', 'error');
+                } else {
+                    showToast('Generation interrompue avant le premier contenu. Reessayez.', 'error');
                 }
             }
         } catch (err) {
@@ -1421,8 +1571,10 @@ const App = (() => {
         const content = document.getElementById('resultContent');
         const progress = document.getElementById('streamProgress');
         if (progress) progress.style.display = 'none';
+        resetEditMode();
+        resetThinkingPanel();
         if (content) renderMarkdown(result, content);
-        if (modal) modal.style.display = 'block';
+        openModal(modal);
         // Show edit button
         const editBtn = document.getElementById('editBtn');
         if (editBtn) editBtn.style.display = 'inline-flex';

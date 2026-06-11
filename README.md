@@ -221,7 +221,9 @@ pytest --cov=app
 
 ```bash
 pip install gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 "app:create_app('production')"
+# -k gevent + --timeout 300 obligatoires : les workers sync (defaut, timeout 30s)
+# tuent les streams SSE des generations longues en plein milieu
+gunicorn -k gevent -w 4 -b 0.0.0.0:5000 --timeout 300 --graceful-timeout 300 --keep-alive 65 "app:create_app('production')"
 ```
 
 ### Avec Docker Compose

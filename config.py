@@ -4,6 +4,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var, falling back to default on absence or bad format."""
+    try:
+        return int(os.environ.get(name, '') or default)
+    except ValueError:
+        return default
+
+
 # Fallback de developpement : create_app refuse de demarrer en production avec cette valeur
 DEFAULT_SECRET_KEY = 'dev-change-me-in-production'
 
@@ -65,6 +74,13 @@ class Config:
             'default_model': 'glm-5.1',
         },
     }
+
+    # Generation LLM
+    # max_tokens inclut le thinking des modeles a raisonnement : 8192 tronquait
+    # les documents longs en plein milieu (symptome "generation bloquee")
+    LLM_MAX_TOKENS: int = _env_int('LLM_MAX_TOKENS', 16384)
+    # Timeout de LECTURE entre deux chunks du provider (pas la duree totale du stream)
+    LLM_REQUEST_TIMEOUT: int = _env_int('LLM_REQUEST_TIMEOUT', 300)
 
     # History pagination
     HISTORY_PER_PAGE: int = 20

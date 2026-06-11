@@ -235,7 +235,7 @@ class TestProviderCatalog:
             assert headers['x-api-key'] == 'sk-test'
             assert headers['anthropic-version'] == '2023-06-01'
             assert 'Authorization' not in headers
-            assert payload['max_tokens'] == 8192
+            assert payload['max_tokens'] == app.config['LLM_MAX_TOKENS']
 
             url, headers, payload, fmt = _build_request(
                 provider, 'opencode', 'glm-5.1', 'sk-test', 'Bonjour', stream=True

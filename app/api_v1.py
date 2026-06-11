@@ -515,6 +515,7 @@ def generate_stream():
     def event_stream():
         with app.app_context():
             full_content = ''
+            truncated = False
             for event in stream_llm_api(prompt, provider_id, model_id, api_key):
                 yield event
                 if '"type": "done"' in event or '"type":"done"' in event:
@@ -523,21 +524,36 @@ def generate_stream():
                         if line.startswith('data: '):
                             payload = _json.loads(line[6:])
                             full_content = payload.get('content', '')
+                            truncated = bool(payload.get('truncated'))
                     except Exception:
                         pass
 
-            # Save to history after streaming completes
+            # Save to history after streaming completes. Protege : une erreur DB
+            # apres le 'done' ne doit pas casser le flux SSE sans explication
             if full_content:
-                entry = create_history_entry(
-                    user_id=user_id,
-                    template_id=tpl_id,
-                    template_name=tpl_name,
-                    variables=variables,
-                    provider=provider_id,
-                    model=model_id,
-                    result=full_content,
-                )
-                yield f"data: {_json.dumps({'type': 'saved', 'entry_id': entry.id})}\n\n"
+                # Marqueur persistant : sans lui, un document tronque par max_tokens
+                # serait relu/exporte plus tard comme s'il etait complet
+                if truncated:
+                    full_content += ('\n\n> **Avertissement : reponse tronquee, '
+                                     'limite de tokens atteinte (LLM_MAX_TOKENS).**')
+                try:
+                    entry = create_history_entry(
+                        user_id=user_id,
+                        template_id=tpl_id,
+                        template_name=tpl_name,
+                        variables=variables,
+                        provider=provider_id,
+                        model=model_id,
+                        result=full_content,
+                    )
+                    yield f"data: {_json.dumps({'type': 'saved', 'entry_id': entry.id})}\n\n"
+                except Exception as exc:
+                    logger.error('History save failed after stream: %s', exc, exc_info=True)
+                    yield ("data: " + _json.dumps({
+                        'type': 'error',
+                        'message': "Resultat genere mais non sauvegarde dans l'historique "
+                                   "(erreur interne). Copiez-le avant de fermer.",
+                    }, ensure_ascii=False) + "\n\n")
 
     return Response(event_stream(), mimetype='text/event-stream', headers={
         'Cache-Control': 'no-cache',

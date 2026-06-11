@@ -10,6 +10,8 @@ services:
       - SECRET_KEY=${SECRET_KEY:?Definissez SECRET_KEY dans .env (python -c "import secrets; print(secrets.token_hex(32))")}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-16384}
+      - LLM_REQUEST_TIMEOUT=${LLM_REQUEST_TIMEOUT:-300}
       - DATABASE_URL=postgresql://saas:saas@db:5432/saas_generator
       - FLASK_ENV=production
     volumes:
