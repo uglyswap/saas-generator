@@ -28,15 +28,23 @@ def _get_fernet() -> Fernet:
 
 
 def encrypt_api_key(api_key: str) -> str:
-    """Encrypt an API key for safe storage in the database."""
+    """Encrypt an API key for safe storage in the database.
+
+    Leve ValueError si le chiffrement echoue (ex. ENCRYPTION_KEY mal formee) :
+    renvoyer '' silencieusement faisait persister une cle vide a la place de la
+    vraie sans que l'appelant le sache (perte de cle invisible).
+    """
     if not api_key:
         return ''
     try:
         f = _get_fernet()
         return f.encrypt(api_key.encode()).decode()
-    except Exception:
+    except Exception as exc:
         logger.error('Failed to encrypt API key', exc_info=True)
-        return ''
+        raise ValueError(
+            "Echec du chiffrement de la cle API : verifiez ENCRYPTION_KEY "
+            "(doit etre une cle Fernet valide : Fernet.generate_key())."
+        ) from exc
 
 
 def decrypt_api_key(encrypted: str) -> str:

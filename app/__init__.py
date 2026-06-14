@@ -135,6 +135,11 @@ def create_app(config_name: Optional[str] = None) -> Flask:
         """Return JSON for CSRF errors on API calls."""
         return jsonify({'error': 'Session expiree. Rafraichissez la page (F5).'}), 400
 
+    @app.route('/health')
+    def health_check():
+        """Healthcheck non authentifie (load balancer, Docker HEALTHCHECK)."""
+        return jsonify({'status': 'ok'}), 200
+
     # -------------------------------------------------------------------
     # Database initialisation
     # -------------------------------------------------------------------

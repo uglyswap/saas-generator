@@ -18,7 +18,8 @@ def require_setup():
     if request.endpoint and request.endpoint.startswith('static'):
         return None
     if User.query.count() == 0:
-        allowed = ('auth.setup', 'auth.setup_post', 'static')
+        # health_check : le healthcheck doit repondre meme avant le setup initial
+        allowed = ('auth.setup', 'auth.setup_post', 'static', 'health_check')
         if request.endpoint not in allowed:
             return redirect(url_for('auth.setup'))
     return None

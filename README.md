@@ -117,10 +117,14 @@ docker-compose up -d
 ### Fichier .env exemple
 
 ```env
-SECRET_KEY=votre-cle-secrete-tres-longue
+# SECRET_KEY : python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=remplacez-par-une-vraie-cle-aleatoire
 DATABASE_URL=postgresql://user:pass@localhost/saas_generator
 FLASK_ENV=production
-ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+# ENCRYPTION_KEY : DOIT etre une cle Fernet valide (44 caracteres base64-urlsafe),
+# pas une chaine hex arbitraire. Generation :
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY=
 ```
 
 ## Structure du Projet

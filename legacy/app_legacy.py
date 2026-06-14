@@ -1,3 +1,10 @@
+# =====================================================================
+# GELE - NE PAS UTILISER. Ancienne version mono-utilisateur, remplacee par
+# le package app/ (factory + blueprints + services) et run.py. Conservee a
+# titre d'archive uniquement : n'est importee nulle part et est exclue de
+# l'image Docker (.dockerignore). Ne pas relancer en l'etat : stockait les
+# cles API en clair (config.json) et exposait /api/config sans authentification.
+# =====================================================================
 import os
 import json
 import re
@@ -750,5 +757,7 @@ if __name__ == "__main__":
     if not os.path.exists("exports"):
         os.makedirs("exports")
 
-    # Lancer l'application
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # GELE : debug desactive et bind sur localhost uniquement. L'ancien code
+    # lancait app.run(host="0.0.0.0", debug=True) -> console Werkzeug (RCE
+    # distante) exposee sur le reseau. Utiliser run.py (package app/) a la place.
+    app.run(host="127.0.0.1", port=5000, debug=False)

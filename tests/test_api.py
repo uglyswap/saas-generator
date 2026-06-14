@@ -149,6 +149,15 @@ class TestMultiUser:
         assert resp.status_code == 404
 
 
+class TestHealth:
+    """Healthcheck endpoint (non authentifie)."""
+
+    def test_health_ok(self, client):
+        resp = client.get('/health')
+        assert resp.status_code == 200
+        assert resp.get_json()['status'] == 'ok'
+
+
 class TestUnauthorized:
     """Test endpoints require authentication."""
 
