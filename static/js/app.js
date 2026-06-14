@@ -191,9 +191,14 @@ const App = (() => {
                 try { hljs.highlightElement(code); } catch {}
             }
         } else if (markdownReady) {
-            const parsed = marked.parse(raw || '');
-            // Sanitisation : la sortie LLM est du contenu non fiable injecte via innerHTML
-            element.innerHTML = (typeof DOMPurify !== 'undefined') ? DOMPurify.sanitize(parsed) : parsed;
+            // Sanitisation : la sortie LLM est du contenu non fiable injecte via innerHTML.
+            // Sans DOMPurify (CDN indisponible), ne JAMAIS injecter de HTML brut : on
+            // retombe sur un affichage texte echappe (lisible, et surtout pas de XSS).
+            if (typeof DOMPurify !== 'undefined') {
+                element.innerHTML = DOMPurify.sanitize(marked.parse(raw || ''));
+            } else {
+                element.textContent = raw || '';
+            }
             element.classList.remove('markdown', 'html-content');
             element.classList.add('rendered-markdown');
             // Render mermaid diagrams
@@ -329,6 +334,8 @@ const App = (() => {
 
     let editMode = false;
     let lastRawMarkdown = '';
+    // Dernier payload de generation, pour la reprise manuelle apres troncature
+    let lastGenPayload = null;
 
     // Remet l'affichage hors mode edition (nouvelle generation, fermeture modale) :
     // sinon le stream serait rendu dans un resultContent en display:none
@@ -464,7 +471,12 @@ const App = (() => {
                         model: modelId,
                     }),
                 });
-                if (ok && data.replacement) {
+                if (ok && data.replacement && data.truncated) {
+                    // Remplacement coupe a max_tokens : ne pas ecraser la section par une
+                    // version incomplete (le document resterait corrompu silencieusement)
+                    showToast('Regeneration tronquee (limite de tokens) : section inchangee. '
+                        + 'Reessayez ou raccourcissez la selection.', 'error');
+                } else if (ok && data.replacement) {
                     lastRawMarkdown = lastRawMarkdown.replace(selectedText, data.replacement);
                     flushMarkdownRender(lastRawMarkdown, document.getElementById('resultContent'));
                     // Auto-save
@@ -1305,6 +1317,7 @@ const App = (() => {
                 btn.classList.add('btn-loader');
 
                 const payload = { template_id: templateId, provider: pid, model: modelId, variables };
+                lastGenPayload = payload;
 
                 if (useStreaming) {
                     await generateWithStreaming(payload, btn);
@@ -1318,6 +1331,7 @@ const App = (() => {
         const closeBtn = document.getElementById('closeResultBtn');
         if (closeBtn) closeBtn.addEventListener('click', () => {
             resetEditMode();
+            clearTruncationBanner();
             closeModal(document.getElementById('resultModal'));
         });
 
@@ -1350,7 +1364,12 @@ const App = (() => {
                 lastEntryId = data.entry_id;
                 lastRawMarkdown = data.result;
                 showResult(data.result);
-                showToast('Generation reussie !', 'success');
+                if (data.truncated) {
+                    showToast('Reponse tronquee apres relances : document incomplet', 'error');
+                    showTruncationBanner(true);
+                } else {
+                    showToast('Generation reussie !', 'success');
+                }
             } else {
                 showToast(data.error || 'Erreur lors de la generation', 'error');
             }
@@ -1420,25 +1439,77 @@ const App = (() => {
         });
     }
 
-    async function generateWithStreaming(payload, btn) {
+    // --- Banniere de troncature (signal persistant + reprise manuelle) ---
+
+    function clearTruncationBanner() {
+        const existing = document.getElementById('truncationBanner');
+        if (existing) existing.remove();
+    }
+
+    function showTruncationBanner(canContinue) {
+        const content = document.getElementById('resultContent');
+        if (!content || !content.parentNode) return;
+        clearTruncationBanner();
+        const banner = document.createElement('div');
+        banner.id = 'truncationBanner';
+        banner.className = 'flex items-center justify-between gap-3 px-4 py-3 mb-3 rounded-xl border '
+            + 'bg-amber-50 dark:bg-amber-950 border-amber-300 dark:border-amber-800 '
+            + 'text-amber-800 dark:text-amber-200';
+        const msg = document.createElement('span');
+        msg.className = 'text-sm font-medium';
+        msg.textContent = 'Reponse tronquee : limite de tokens (LLM_MAX_TOKENS) atteinte meme '
+            + 'apres relances automatiques. Le document est incomplet.';
+        banner.appendChild(msg);
+        if (canContinue && lastGenPayload) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 '
+                + 'text-white text-sm font-medium';
+            btn.textContent = 'Continuer la generation';
+            btn.addEventListener('click', () => continueGeneration(btn));
+            banner.appendChild(btn);
+        }
+        content.parentNode.insertBefore(banner, content);
+    }
+
+    async function continueGeneration(triggerBtn) {
+        if (!lastGenPayload || !lastRawMarkdown) return;
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = 'Poursuite...';
+        clearTruncationBanner();
+        const genBtn = document.getElementById('generateBtn') || triggerBtn;
+        // continue_from : le serveur reinjecte le document deja recu comme contexte
+        // assistant et renvoie le document COMPLET dans l'event 'done'
+        await generateWithStreaming(
+            { ...lastGenPayload, continue_from: lastRawMarkdown },
+            genBtn,
+            { continueMode: true },
+        );
+    }
+
+    async function generateWithStreaming(payload, btn, opts = {}) {
+        const continueMode = !!opts.continueMode;
         const modal = document.getElementById('resultModal');
         const content = document.getElementById('resultContent');
         const progress = document.getElementById('streamProgress');
         const statusEl = progress?.querySelector('.stream-status');
 
         openModal(modal);
-        resetEditMode();
-        content.innerHTML = '';
-        content.classList.remove('markdown');
-        content.classList.add('rendered-markdown');
-        lastRawMarkdown = '';
-        // L'ID d'entree appartient a la generation PRECEDENTE : le garder ferait
-        // ecraser son historique par saveEdit/export si ce stream est interrompu
-        lastEntryId = null;
         resetThinkingPanel();
         setupThinkingToggle();
-        const versionsPanel = document.getElementById('versionsPanel');
-        if (versionsPanel) { versionsPanel.style.display = 'none'; versionsPanel.innerHTML = ''; }
+        if (!continueMode) {
+            resetEditMode();
+            content.innerHTML = '';
+            content.classList.remove('markdown');
+            content.classList.add('rendered-markdown');
+            lastRawMarkdown = '';
+            // L'ID d'entree appartient a la generation PRECEDENTE : le garder ferait
+            // ecraser son historique par saveEdit/export si ce stream est interrompu
+            lastEntryId = null;
+            clearTruncationBanner();
+            const versionsPanel = document.getElementById('versionsPanel');
+            if (versionsPanel) { versionsPanel.style.display = 'none'; versionsPanel.innerHTML = ''; }
+        }
         if (progress) progress.style.display = 'flex';
         if (statusEl) statusEl.textContent = 'Generation en cours...';
 
@@ -1494,8 +1565,10 @@ const App = (() => {
                         if (progress) progress.style.display = 'none';
                         if (editBtn) editBtn.style.display = 'inline-flex';
                         if (event.truncated) {
-                            showToast('Reponse tronquee : limite de tokens atteinte (LLM_MAX_TOKENS)', 'error');
+                            showToast('Reponse tronquee apres relances : document incomplet', 'error');
+                            showTruncationBanner(true);
                         } else {
+                            clearTruncationBanner();
                             showToast('Generation terminee !', 'success');
                         }
                     } else if (event.type === 'saved') {
@@ -1517,6 +1590,10 @@ const App = (() => {
                             // c'est la seule sortie que l'utilisateur peut consulter
                             showToast(event.message || 'Erreur', 'error');
                         }
+                    } else if (event.type === 'continuing') {
+                        // Auto-continuation serveur : document long, relance transparente
+                        if (statusEl) statusEl.textContent = event.message || 'Poursuite automatique...';
+                        if (progress) progress.style.display = 'flex';
                     } else if (event.type === 'start') {
                         if (statusEl) statusEl.textContent = event.message;
                     }
@@ -1571,6 +1648,7 @@ const App = (() => {
         const content = document.getElementById('resultContent');
         const progress = document.getElementById('streamProgress');
         if (progress) progress.style.display = 'none';
+        clearTruncationBanner();
         resetEditMode();
         resetThinkingPanel();
         if (content) renderMarkdown(result, content);

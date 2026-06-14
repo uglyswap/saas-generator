@@ -14,7 +14,18 @@ from app.utils.validators import (
     safe_substitute,
     extract_variables,
 )
-from app.services.llm_service import call_llm_api, stream_llm_api, fetch_models, get_static_models
+from app.services.llm_service import (
+    call_llm_api,
+    call_llm_api_full,
+    stream_llm_api,
+    fetch_models,
+    get_static_models,
+)
+
+# Marqueur persistant ajoute a un resultat tronque : sans lui, un document coupe
+# par max_tokens serait relu/exporte plus tard comme s'il etait complet.
+TRUNCATION_MARKER = ('\n\n> **Avertissement : reponse tronquee, '
+                     'limite de tokens atteinte (LLM_MAX_TOKENS).**')
 from app.services.template_service import (
     get_user_templates,
     get_template,
@@ -102,7 +113,13 @@ def save_config():
         db.session.add(pc)
 
     if api_key:
-        pc.api_key_encrypted = encrypt_api_key(api_key)
+        try:
+            pc.api_key_encrypted = encrypt_api_key(api_key)
+        except ValueError as exc:
+            # Chiffrement impossible (ENCRYPTION_KEY mal formee) : ne pas persister
+            # une cle vide silencieusement, remonter l'erreur a l'utilisateur
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 500
     if model_id:
         pc.selected_model = model_id
         # When saving a model choice, mark this provider as the user's default
@@ -461,11 +478,16 @@ def generate():
     if error_resp:
         return error_resp
 
-    result, error, status = call_llm_api(
+    result, truncated, error, status = call_llm_api_full(
         ctx['prompt'], ctx['provider_id'], ctx['model_id'], ctx['api_key']
     )
     if error:
         return jsonify({'error': error}), status
+
+    # Meme traitement que la voie streaming : marqueur persistant + flag client,
+    # pour qu'un document tronque ne soit pas relu/exporte comme s'il etait complet
+    if truncated:
+        result = (result or '') + TRUNCATION_MARKER
 
     entry = create_history_entry(
         user_id=current_user.id,
@@ -476,7 +498,7 @@ def generate():
         model=ctx['model_id'],
         result=result,
     )
-    return jsonify({'success': True, 'result': result, 'entry_id': entry.id})
+    return jsonify({'success': True, 'result': result, 'entry_id': entry.id, 'truncated': truncated})
 
 
 @api_v1_bp.route('/generate/stream', methods=['POST'])
@@ -510,13 +532,17 @@ def generate_stream():
     user_id = current_user.id
     prompt = ctx['prompt']
     api_key = ctx['api_key']
+    # Reprise manuelle apres troncature : le client renvoie le document deja recu,
+    # le service le reinjecte comme contexte assistant pour continuer la generation
+    continue_from = _as_str(data.get('continue_from'))
     app = current_app._get_current_object()
 
     def event_stream():
         with app.app_context():
             full_content = ''
             truncated = False
-            for event in stream_llm_api(prompt, provider_id, model_id, api_key):
+            for event in stream_llm_api(prompt, provider_id, model_id, api_key,
+                                        continue_from=continue_from):
                 yield event
                 if '"type": "done"' in event or '"type":"done"' in event:
                     try:
@@ -531,11 +557,10 @@ def generate_stream():
             # Save to history after streaming completes. Protege : une erreur DB
             # apres le 'done' ne doit pas casser le flux SSE sans explication
             if full_content:
-                # Marqueur persistant : sans lui, un document tronque par max_tokens
-                # serait relu/exporte plus tard comme s'il etait complet
+                # Marqueur persistant (cf. TRUNCATION_MARKER) : un document tronque
+                # ne doit pas etre relu/exporte plus tard comme s'il etait complet
                 if truncated:
-                    full_content += ('\n\n> **Avertissement : reponse tronquee, '
-                                     'limite de tokens atteinte (LLM_MAX_TOKENS).**')
+                    full_content += TRUNCATION_MARKER
                 try:
                     entry = create_history_entry(
                         user_id=user_id,
@@ -605,11 +630,13 @@ def generate_partial():
         f"{selected_text}"
     )
 
-    result, error, status = call_llm_api(prompt, provider_id, model_id, api_key)
+    result, truncated, error, status = call_llm_api_full(prompt, provider_id, model_id, api_key)
     if error:
         return jsonify({'error': error}), status
 
-    return jsonify({'success': True, 'replacement': result})
+    # truncated remonte au client : le frontend refuse le remplacement automatique
+    # d'une section par une version coupee (cf. app.js applyPartialRegeneration)
+    return jsonify({'success': True, 'replacement': result, 'truncated': truncated})
 
 
 # -----------------------------------------------------------------------

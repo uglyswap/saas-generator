@@ -18,14 +18,48 @@ def _request_timeout() -> tuple:
     return (CONNECT_TIMEOUT, int(current_app.config.get('LLM_REQUEST_TIMEOUT', 300)))
 
 
-def _max_tokens() -> int:
-    return int(current_app.config.get('LLM_MAX_TOKENS', 16384))
+# Plafond de sortie (max_tokens) par requete et par provider. ESTIMATIONS A
+# CONFIRMER en doc provider (docs.z.ai, dashscope coding-intl, opencode.ai/zen/go) :
+# un cap trop bas bride inutilement, trop haut laisse passer un 400 (rattrape par
+# _http_error_details + l'auto-continuation). None = pas de clamp.
+_PROVIDER_OUTPUT_CAP: Dict[str, Optional[int]] = {
+    'zai': 16384,
+    'alibaba': 32768,
+    'opencode': 32768,
+    'openrouter': None,
+}
+
+# Nombre maximum de relances automatiques apres une coupure a max_tokens.
+MAX_CONTINUATIONS = 4
+# Consigne de reprise envoyee au modele apres une troncature.
+CONTINUE_HINT = (
+    "Continue exactement la ou tu t'es arrete, au caractere suivant, sans repeter "
+    "ni reformuler ce qui precede, sans introduction ni conclusion."
+)
+
+
+def _max_tokens(provider_id: Optional[str] = None) -> int:
+    """Budget de sortie demande, clampe au plafond reel connu du provider.
+
+    LLM_MAX_TOKENS est envoye tel quel comme max_tokens : au-dela du plafond d'un
+    provider, celui-ci renvoie un 400. Le clamp evite ce 400 ; l'auto-continuation
+    (call_llm_api_full / stream_llm_api) gere les documents depassant un seul appel.
+    """
+    want = int(current_app.config.get('LLM_MAX_TOKENS', 16384))
+    cap = _PROVIDER_OUTPUT_CAP.get(provider_id)
+    return min(want, cap) if cap else want
+
 
 # Provider-specific parameters added to every OpenAI-format request
 _PROVIDER_PARAMS: Dict[str, dict] = {
     'zai': {'thinking': {'type': 'disabled'}},
     'alibaba': {'thinking': {'type': 'disabled'}},
 }
+
+# Providers dont les modeles emettent du raisonnement par defaut en format
+# Anthropic (/messages) : on desactive le thinking pour garder tout le budget
+# max_tokens a la reponse finale (meme politique que _PROVIDER_PARAMS en OpenAI).
+_ANTHROPIC_DISABLE_THINKING = {'opencode'}
 
 # Static model lists - used as fallback and merged with dynamic API results.
 # Sorted alphabetically by name. 'api_format' defaults to 'openai' when absent.
@@ -109,9 +143,16 @@ def _build_request(
     api_key: str,
     prompt: str,
     stream: bool,
+    messages: Optional[list] = None,
 ) -> Tuple[str, dict, dict, str]:
-    """Build (url, headers, payload, api_format) for a generation call."""
+    """Build (url, headers, payload, api_format) for a generation call.
+
+    `messages` permet de fournir une conversation complete (reprise apres
+    troncature : [user, assistant_partiel, user_hint]) ; a defaut on envoie un
+    unique tour user contenant `prompt`.
+    """
     api_format = _model_api_format(provider_id, model_id)
+    msgs = messages if messages is not None else [{'role': 'user', 'content': prompt}]
 
     # Un format anthropic exige un endpoint anthropic configure : sinon on retombe
     # explicitement sur le format openai plutot que d'envoyer un payload Anthropic
@@ -132,11 +173,15 @@ def _build_request(
         }
         payload: Dict[str, Any] = {
             'model': model_id,
-            'max_tokens': _max_tokens(),
+            'max_tokens': _max_tokens(provider_id),
             'temperature': 0.7,
             'top_p': 0.95,
-            'messages': [{'role': 'user', 'content': prompt}],
+            'messages': msgs,
         }
+        # Modeles a raisonnement routes en /messages : couper le thinking pour ne
+        # pas consommer le budget max_tokens avant la reponse finale
+        if provider_id in _ANTHROPIC_DISABLE_THINKING:
+            payload['thinking'] = {'type': 'disabled'}
     else:
         url = provider['api_url']
         headers = {
@@ -145,9 +190,9 @@ def _build_request(
         }
         payload = {
             'model': model_id,
-            'messages': [{'role': 'user', 'content': prompt}],
+            'messages': msgs,
             'temperature': 0.7,
-            'max_tokens': _max_tokens(),
+            'max_tokens': _max_tokens(provider_id),
             'top_p': 0.95,
         }
         payload.update(_PROVIDER_PARAMS.get(provider_id, {}))
@@ -173,6 +218,19 @@ def _extract_content(data: dict, api_format: str) -> str:
         msg = data['choices'][0].get('message', {})
         return msg.get('content', '') or ''
     return ''
+
+
+def _response_truncated(data: dict, api_format: str) -> bool:
+    """True si une reponse synchrone a ete coupee au plafond max_tokens.
+
+    Pendant : stop_reason=max_tokens (Anthropic), finish_reason=length (OpenAI).
+    """
+    if api_format == 'anthropic':
+        return data.get('stop_reason') == 'max_tokens'
+    choices = data.get('choices') or []
+    if choices:
+        return (choices[0] or {}).get('finish_reason') == 'length'
+    return False
 
 
 def _http_error_details(exc: http_requests.exceptions.HTTPError) -> Tuple[str, int]:
@@ -213,6 +271,99 @@ def _read_timed_out(exc: Exception) -> bool:
     return 'Read timed out' in str(exc)
 
 
+def _call_once(
+    provider: dict,
+    provider_id: str,
+    model_id: str,
+    api_key: str,
+    messages: list,
+) -> Tuple[Optional[str], bool, Optional[str], int]:
+    """Un appel synchrone. Retourne (contenu, tronque, erreur, status)."""
+    url, headers, payload, api_format = _build_request(
+        provider, provider_id, model_id, api_key, '', stream=False, messages=messages
+    )
+    try:
+        logger.info('Calling %s model=%s format=%s', provider['name'], model_id, api_format)
+        resp = http_requests.post(url, headers=headers, json=payload, timeout=_request_timeout())
+        resp.raise_for_status()
+        data = resp.json()
+
+        content = _extract_content(data, api_format)
+        truncated = _response_truncated(data, api_format)
+        if content:
+            return content, truncated, None, 200
+        if api_format == 'openai' and 'choices' not in data:
+            return None, False, "Format de reponse invalide", 502
+        return None, truncated, ("Reponse vide du modele (le raisonnement a peut-etre consomme "
+                                 "tout le budget LLM_MAX_TOKENS)"), 502
+
+    except http_requests.exceptions.ConnectTimeout:
+        return None, False, f"Connexion au provider impossible en {CONNECT_TIMEOUT}s. Reessayez.", 504
+    except http_requests.exceptions.Timeout:
+        return None, False, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans reponse "
+                             f"du provider). Reessayez."), 504
+    except http_requests.exceptions.HTTPError as exc:
+        message, status = _http_error_details(exc)
+        return None, False, message, status
+    except http_requests.exceptions.ConnectionError as exc:
+        if _read_timed_out(exc):
+            return None, False, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees "
+                                 f"du provider). Reessayez."), 504
+        return None, False, "Erreur de connexion. Verifiez votre acces internet.", 502
+    except Exception as exc:
+        logger.error('Unexpected LLM error: %s', exc, exc_info=True)
+        return None, False, f"Erreur inattendue : {exc}", 500
+
+
+def call_llm_api_full(
+    prompt: str,
+    provider_id: str,
+    model_id: str,
+    api_key: str,
+) -> Tuple[Optional[str], bool, Optional[str], int]:
+    """Appel synchrone avec auto-continuation. Retourne (resultat, tronque, erreur, status).
+
+    Si un appel est coupe a max_tokens, on relance jusqu'a MAX_CONTINUATIONS fois
+    en reinjectant le contenu deja produit comme tour assistant + une consigne de
+    reprise, puis on concatene. `tronque` reste True seulement si le document est
+    toujours incomplet apres epuisement des relances.
+    """
+    provider = get_provider_info(provider_id)
+    if not provider:
+        return None, False, f"Provider inconnu : {provider_id}", 400
+    if not api_key:
+        return None, False, f"Cle API manquante pour {provider['name']}", 400
+
+    messages = [{'role': 'user', 'content': prompt}]
+    full = ''
+    truncated = False
+    for turn in range(MAX_CONTINUATIONS + 1):
+        content, turn_truncated, error, status = _call_once(
+            provider, provider_id, model_id, api_key, messages
+        )
+        if error:
+            # Du contenu deja accumule : renvoyer ce qu'on a (marque tronque) plutot
+            # que de tout perdre sur une erreur survenant en pleine continuation
+            if full:
+                return full, True, None, 200
+            return None, False, error, status
+        full += content or ''
+        if not turn_truncated:
+            truncated = False
+            break
+        if not content or turn >= MAX_CONTINUATIONS:
+            truncated = True
+            break
+        messages = [
+            {'role': 'user', 'content': prompt},
+            {'role': 'assistant', 'content': full},
+            {'role': 'user', 'content': CONTINUE_HINT},
+        ]
+
+    logger.info('Success - %d chars (truncated=%s)', len(full), truncated)
+    return full, truncated, None, 200
+
+
 def call_llm_api(
     prompt: str,
     provider_id: str,
@@ -221,50 +372,12 @@ def call_llm_api(
 ) -> Tuple[Optional[str], Optional[str], int]:
     """Call LLM API synchronously. Returns (result, error, status_code).
 
-    status_code is the suggested HTTP status for the API response
+    Compat retro (3-uplet) : delegue a call_llm_api_full, qui auto-continue en cas
+    de troncature. status_code is the suggested HTTP status for the API response
     (200 on success, 4xx for user-correctable errors, 5xx otherwise).
     """
-    provider = get_provider_info(provider_id)
-    if not provider:
-        return None, f"Provider inconnu : {provider_id}", 400
-    if not api_key:
-        return None, f"Cle API manquante pour {provider['name']}", 400
-
-    url, headers, payload, api_format = _build_request(
-        provider, provider_id, model_id, api_key, prompt, stream=False
-    )
-
-    try:
-        logger.info('Calling %s model=%s format=%s', provider['name'], model_id, api_format)
-        resp = http_requests.post(url, headers=headers, json=payload, timeout=_request_timeout())
-        resp.raise_for_status()
-        data = resp.json()
-
-        content = _extract_content(data, api_format)
-        if content:
-            logger.info('Success - %d chars', len(content))
-            return content, None, 200
-        if api_format == 'openai' and 'choices' not in data:
-            return None, "Format de reponse invalide", 502
-        return None, ("Reponse vide du modele (le raisonnement a peut-etre consomme "
-                      "tout le budget LLM_MAX_TOKENS)"), 502
-
-    except http_requests.exceptions.ConnectTimeout:
-        return None, f"Connexion au provider impossible en {CONNECT_TIMEOUT}s. Reessayez.", 504
-    except http_requests.exceptions.Timeout:
-        return None, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans reponse "
-                      f"du provider). Reessayez."), 504
-    except http_requests.exceptions.HTTPError as exc:
-        message, status = _http_error_details(exc)
-        return None, message, status
-    except http_requests.exceptions.ConnectionError as exc:
-        if _read_timed_out(exc):
-            return None, (f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees "
-                          f"du provider). Reessayez."), 504
-        return None, "Erreur de connexion. Verifiez votre acces internet.", 502
-    except Exception as exc:
-        logger.error('Unexpected LLM error: %s', exc, exc_info=True)
-        return None, f"Erreur inattendue : {exc}", 500
+    result, _truncated, error, status = call_llm_api_full(prompt, provider_id, model_id, api_key)
+    return result, error, status
 
 
 def _stream_error(chunk: dict, api_format: str) -> Optional[str]:
@@ -317,27 +430,15 @@ def _parse_stream_chunk(chunk: dict, api_format: str) -> Dict[str, Any]:
     return result
 
 
-def stream_llm_api(
-    prompt: str,
-    provider_id: str,
-    model_id: str,
-    api_key: str,
-) -> Generator[str, None, None]:
-    """Stream LLM response as Server-Sent Events."""
-    provider = get_provider_info(provider_id)
-    if not provider:
-        yield _sse({'type': 'error', 'message': f'Provider inconnu : {provider_id}'})
-        return
-    if not api_key:
-        yield _sse({'type': 'error', 'message': f'Cle API manquante pour {provider["name"]}'})
-        return
+def _consume_turn(url: str, headers: dict, payload: dict, api_format: str):
+    """Consomme UN appel stream. Yield les SSE thinking/token/error de ce tour.
 
-    url, headers, payload, api_format = _build_request(
-        provider, provider_id, model_id, api_key, prompt, stream=True
-    )
-
-    yield _sse({'type': 'start', 'message': 'Generation en cours...'})
-
+    Retourne (texte, tronque, had_thinking, erreur) ; `erreur` non-None signale
+    que l'event 'error' a deja ete emis et que la boucle appelante doit s'arreter.
+    """
+    turn_text = ''
+    turn_truncated = False
+    had_thinking = False
     try:
         resp = http_requests.post(
             url, headers=headers, json=payload,
@@ -345,9 +446,6 @@ def stream_llm_api(
         )
         resp.raise_for_status()
 
-        full_content = ''
-        truncated = False
-        had_thinking = False
         for line in resp.iter_lines():
             if not line:
                 continue
@@ -364,56 +462,44 @@ def stream_llm_api(
                 # la propager au client au lieu de terminer sur un faux 'done'
                 upstream_error = _stream_error(chunk, api_format)
                 if upstream_error:
-                    logger.warning('Stream upstream error (%s): %s', provider_id, upstream_error)
+                    logger.warning('Stream upstream error: %s', upstream_error)
                     yield _sse({'type': 'error', 'message': upstream_error})
-                    return
+                    return turn_text, turn_truncated, had_thinking, upstream_error
                 parsed = _parse_stream_chunk(chunk, api_format)
                 if parsed['truncated']:
-                    truncated = True
+                    turn_truncated = True
                 if parsed['thinking']:
                     # Raisonnement du modele : affiche a part, jamais dans le resultat
                     had_thinking = True
                     yield _sse({'type': 'thinking', 'content': parsed['thinking']})
                 if parsed['token']:
-                    full_content += parsed['token']
+                    turn_text += parsed['token']
                     yield _sse({'type': 'token', 'content': parsed['token']})
                 if parsed['stop']:
                     break
             except (json.JSONDecodeError, IndexError, KeyError):
                 continue
-
-        # Stream termine sans aucune reponse : erreur explicite plutot qu'un
-        # faux 'done' vide (toast de succes au-dessus d'un resultat vide)
-        if not full_content:
-            if truncated:
-                message = ("Budget de tokens entierement consomme par le raisonnement "
-                           "du modele : augmentez LLM_MAX_TOKENS")
-            elif had_thinking:
-                message = "Le modele n'a produit que du raisonnement, sans reponse finale. Reessayez."
-            else:
-                message = "Reponse vide du modele"
-            yield _sse({'type': 'error', 'message': message})
-            return
-
-        if truncated:
-            logger.warning('Stream truncated by max_tokens (%s/%s)', provider_id, model_id)
-        yield _sse({'type': 'done', 'content': full_content, 'truncated': truncated})
+        return turn_text, turn_truncated, had_thinking, None
 
     except http_requests.exceptions.ConnectTimeout:
         yield _sse({'type': 'error', 'message': (
             f"Connexion au provider impossible en {CONNECT_TIMEOUT}s. Reessayez."
         )})
+        return turn_text, turn_truncated, had_thinking, 'error'
     except http_requests.exceptions.Timeout:
         yield _sse({'type': 'error', 'message': (
             f"Delai d'attente depasse ({_request_timeout()[1]}s sans donnees du provider)"
         )})
+        return turn_text, turn_truncated, had_thinking, 'error'
     except http_requests.exceptions.HTTPError as exc:
         message, _ = _http_error_details(exc)
         yield _sse({'type': 'error', 'message': message})
+        return turn_text, turn_truncated, had_thinking, 'error'
     except http_requests.exceptions.ChunkedEncodingError:
         yield _sse({'type': 'error', 'message': (
             "Flux interrompu par le provider (connexion coupee en cours de generation). Reessayez."
         )})
+        return turn_text, turn_truncated, had_thinking, 'error'
     except http_requests.exceptions.ConnectionError as exc:
         # Pendant iter_lines, un read timeout urllib3 est re-leve en ConnectionError
         if _read_timed_out(exc):
@@ -424,10 +510,104 @@ def stream_llm_api(
             yield _sse({'type': 'error', 'message': (
                 "Connexion au provider perdue en cours de generation. Reessayez."
             )})
+        return turn_text, turn_truncated, had_thinking, 'error'
     except Exception as exc:
         logger.error('Stream error: %s', exc, exc_info=True)
         # Jamais de str(exc) brut au client (details techniques dans les logs)
         yield _sse({'type': 'error', 'message': "Erreur inattendue pendant le streaming. Reessayez."})
+        return turn_text, turn_truncated, had_thinking, 'error'
+
+
+def stream_llm_api(
+    prompt: str,
+    provider_id: str,
+    model_id: str,
+    api_key: str,
+    continue_from: str = '',
+) -> Generator[str, None, None]:
+    """Stream LLM response as Server-Sent Events, avec auto-continuation.
+
+    Si un tour est coupe a max_tokens, on relance (jusqu'a MAX_CONTINUATIONS) en
+    reinjectant le contenu deja produit comme tour assistant + une consigne de
+    reprise. Le flux de tokens reste continu cote client (un event 'continuing'
+    signale la relance). 'done' n'est emis qu'a la fin ; truncated=True seulement
+    si le document est toujours incomplet apres epuisement des relances.
+    """
+    provider = get_provider_info(provider_id)
+    if not provider:
+        yield _sse({'type': 'error', 'message': f'Provider inconnu : {provider_id}'})
+        return
+    if not api_key:
+        yield _sse({'type': 'error', 'message': f'Cle API manquante pour {provider["name"]}'})
+        return
+
+    yield _sse({'type': 'start', 'message': 'Generation en cours...'})
+
+    # continue_from : reprise manuelle apres troncature (le client renvoie le
+    # document deja recu). full_content ne contient que le NOUVEAU texte ; le
+    # 'done' renvoie base + nouveau (document complet a afficher/sauvegarder).
+    base = continue_from or ''
+    if base:
+        messages = [
+            {'role': 'user', 'content': prompt},
+            {'role': 'assistant', 'content': base},
+            {'role': 'user', 'content': CONTINUE_HINT},
+        ]
+    else:
+        messages = [{'role': 'user', 'content': prompt}]
+    full_content = ''
+    truncated = False
+    had_thinking = False
+
+    for turn in range(MAX_CONTINUATIONS + 1):
+        url, headers, payload, api_format = _build_request(
+            provider, provider_id, model_id, api_key, '', stream=True, messages=messages
+        )
+        turn_text, turn_truncated, turn_thinking, error = yield from _consume_turn(
+            url, headers, payload, api_format
+        )
+        full_content += turn_text
+        had_thinking = had_thinking or turn_thinking
+        if error is not None:
+            # _consume_turn a deja emis l'event 'error'
+            return
+        if not turn_truncated:
+            truncated = False
+            break
+        # Coupe a max_tokens : tour vide (rien a continuer) ou relances epuisees -> on s'arrete
+        if not turn_text or turn >= MAX_CONTINUATIONS:
+            truncated = True
+            break
+        messages = [
+            {'role': 'user', 'content': prompt},
+            {'role': 'assistant', 'content': base + full_content},
+            {'role': 'user', 'content': CONTINUE_HINT},
+        ]
+        yield _sse({'type': 'continuing',
+                    'message': 'Document long : poursuite automatique de la generation...'})
+
+    # Stream termine sans aucune reponse : erreur explicite plutot qu'un
+    # faux 'done' vide (toast de succes au-dessus d'un resultat vide)
+    complete = base + full_content
+    if not full_content:
+        if base:
+            # Continuation sans nouveau texte : rien a ajouter, renvoyer l'existant
+            yield _sse({'type': 'done', 'content': complete, 'truncated': truncated})
+            return
+        if truncated:
+            message = ("Budget de tokens entierement consomme par le raisonnement "
+                       "du modele : augmentez LLM_MAX_TOKENS")
+        elif had_thinking:
+            message = "Le modele n'a produit que du raisonnement, sans reponse finale. Reessayez."
+        else:
+            message = "Reponse vide du modele"
+        yield _sse({'type': 'error', 'message': message})
+        return
+
+    if truncated:
+        logger.warning('Stream still truncated after %d continuations (%s/%s)',
+                       MAX_CONTINUATIONS, provider_id, model_id)
+    yield _sse({'type': 'done', 'content': complete, 'truncated': truncated})
 
 
 def _sort_models(models: list) -> list:

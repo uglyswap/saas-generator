@@ -32,14 +32,23 @@ def _create_template(auth_client, **extra):
 
 @pytest.fixture
 def llm_spy(monkeypatch):
-    """Capture call_llm_api arguments without any HTTP call."""
+    """Capture LLM call arguments without any HTTP call.
+
+    Patche les deux entrees : call_llm_api_full (4-uplet, utilise par /generate et
+    /generate/partial) et call_llm_api (3-uplet, utilise par template-content).
+    """
     calls = []
+
+    def fake_full(prompt, provider_id, model_id, api_key):
+        calls.append({'provider': provider_id, 'model': model_id})
+        return 'Resultat genere', False, None, 200
 
     def fake_call(prompt, provider_id, model_id, api_key):
         calls.append({'provider': provider_id, 'model': model_id})
         return 'Resultat genere', None, 200
 
     import app.api_v1 as api_v1
+    monkeypatch.setattr(api_v1, 'call_llm_api_full', fake_full)
     monkeypatch.setattr(api_v1, 'call_llm_api', fake_call)
     return calls
 
