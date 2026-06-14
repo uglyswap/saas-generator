@@ -48,6 +48,7 @@ from app.services.export_service import (
     export_html,
     export_pdf,
     export_docx,
+    HtmlContentNotSupported,
 )
 
 logger = logging.getLogger(__name__)
@@ -773,6 +774,8 @@ def export_entry(entry_id: int):
             content, filename, mimetype = export_docx(raw, title, header_text, footer_text, primary_color)
         else:  # md
             content, filename, mimetype = export_markdown(raw, title)
+    except HtmlContentNotSupported as e:
+        return jsonify({'error': str(e), 'code': 'html_not_supported'}), 422
     except Exception as e:
         logger.error('Export failed: %s', e)
         return jsonify({'error': f'Erreur lors de l\'export: {str(e)}'}), 500

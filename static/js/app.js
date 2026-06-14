@@ -168,6 +168,12 @@ const App = (() => {
         return false;
     }
 
+    function isFullHtmlDocument(text) {
+        if (!text) return false;
+        const t = text.trimStart();
+        return /^<!doctype\s/i.test(t) || /^<html[\s>]/i.test(t);
+    }
+
     /**
      * Render content to element — auto-detects HTML vs Markdown.
      * For HTML content: displays raw source code with syntax highlighting.
@@ -175,8 +181,23 @@ const App = (() => {
      */
     function renderContent(raw, element) {
         if (!element) return;
+        delete element.dataset.rawSource;
         if (isHtmlContent(raw)) {
-            // Show raw HTML as source code — NOT rendered
+            if (isFullHtmlDocument(raw)) {
+                // Document HTML complet : rendu dans une iframe sandbox
+                // (sans allow-scripts ni allow-same-origin) => fidele et sans XSS.
+                element.innerHTML = '';
+                const frame = document.createElement('iframe');
+                frame.setAttribute('sandbox', '');
+                frame.style.cssText = 'width:100%;min-height:70vh;border:0;background:#fff;border-radius:8px;';
+                frame.srcdoc = raw || '';
+                element.appendChild(frame);
+                element.dataset.rawSource = raw || '';
+                element.classList.remove('markdown');
+                element.classList.add('rendered-markdown', 'html-content');
+                return;
+            }
+            // Fragment HTML : affichage du code source (non rendu)
             const pre = document.createElement('pre');
             pre.style.cssText = 'margin:0;overflow-x:auto;';
             const code = document.createElement('code');
@@ -225,6 +246,9 @@ const App = (() => {
 
     function renderMarkdownThrottled(raw, element) {
         if (!element) return;
+        // Un document HTML complet est rendu une seule fois au flush final
+        // (evite de recharger l'iframe a chaque token pendant le streaming).
+        if (isFullHtmlDocument(raw)) return;
         if (!markdownReady && !isHtmlContent(raw)) return;
         if (renderThrottleTimer) return;
         renderThrottleTimer = setTimeout(() => {
@@ -251,9 +275,11 @@ const App = (() => {
 
     async function copyRichText(element) {
         if (!element) return;
+        // Mode document complet (iframe) : copier la source brute, pas le tag iframe.
+        const docSource = element.dataset && element.dataset.rawSource;
         try {
-            const html = element.innerHTML;
-            const text = element.innerText;
+            const html = docSource || element.innerHTML;
+            const text = docSource || element.innerText;
             const htmlBlob = new Blob([html], { type: 'text/html' });
             const textBlob = new Blob([text], { type: 'text/plain' });
             await navigator.clipboard.write([
@@ -273,8 +299,9 @@ const App = (() => {
 
     async function copyHtmlSource(element) {
         if (!element) return;
+        const docSource = element.dataset && element.dataset.rawSource;
         try {
-            await navigator.clipboard.writeText(element.innerHTML);
+            await navigator.clipboard.writeText(docSource || element.innerHTML);
             showToast('Code HTML copie !', 'success');
         } catch {
             showToast('Erreur de copie', 'error');

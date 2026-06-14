@@ -11,6 +11,11 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
 logger = logging.getLogger(__name__)
 
+
+class HtmlContentNotSupported(Exception):
+    """Levee quand un document HTML complet est passe a un exporteur markdown-only (DOCX)."""
+
+
 # CSS for standalone HTML and PDF exports
 BASE_CSS = """
 body {
@@ -73,7 +78,18 @@ def export_html(
     footer_text: str = '',
     primary_color: str = '#2563eb',
 ) -> tuple:
-    """Generate standalone HTML page with embedded CSS."""
+    """Generate standalone HTML page with embedded CSS.
+
+    Si ``raw`` est deja un document HTML complet (le modele a produit
+    ``<!DOCTYPE html>...`` ou ``<html>...``), on le renvoie tel quel sans le
+    convertir depuis le markdown ni le reemballer dans le template BASE_CSS :
+    sinon on imbriquerait deux documents et le ``body{max-width:800px}`` du
+    wrapper ecraserait la mise en page du document genere.
+    """
+    if _is_full_html_document(raw):
+        filename = _safe_filename(title, 'html')
+        return raw.encode('utf-8'), filename, 'text/html; charset=utf-8'
+
     html_body = markdown_to_html(raw)
     css = BASE_CSS.replace('PRIMARY_COLOR', primary_color)
 
@@ -109,13 +125,24 @@ def export_pdf(
     """Generate PDF from markdown via xhtml2pdf."""
     from xhtml2pdf import pisa
 
-    html_body = markdown_to_html(raw)
-    css = BASE_CSS.replace('PRIMARY_COLOR', primary_color)
+    if _is_full_html_document(raw):
+        # Le contenu est deja un document HTML complet : on le rend tel quel,
+        # sans markdown_to_html ni wrapper BASE_CSS (qui imbriquerait deux
+        # documents). On injecte seulement une regle @page si absente. xhtml2pdf
+        # ne gere qu'un sous-ensemble CSS legacy : le CSS moderne peut degrader.
+        logger.warning('export_pdf: document HTML complet detecte, rendu xhtml2pdf (CSS moderne possiblement degrade)')
+        if '@page' in raw or '</head>' not in raw:
+            full_html = raw
+        else:
+            full_html = raw.replace('</head>', '<style>@page { size: A4; margin: 2cm; }</style></head>', 1)
+    else:
+        html_body = markdown_to_html(raw)
+        css = BASE_CSS.replace('PRIMARY_COLOR', primary_color)
 
-    header_block = f'<div class="header">{_escape(header_text)}</div>' if header_text else ''
-    footer_block = f'<div class="footer">{_escape(footer_text)}</div>' if footer_text else ''
+        header_block = f'<div class="header">{_escape(header_text)}</div>' if header_text else ''
+        footer_block = f'<div class="footer">{_escape(footer_text)}</div>' if footer_text else ''
 
-    full_html = f"""<!DOCTYPE html>
+        full_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -149,6 +176,12 @@ def export_docx(
     primary_color: str = '#2563eb',
 ) -> tuple:
     """Generate Word document from markdown by parsing lines."""
+    if _is_full_html_document(raw):
+        raise HtmlContentNotSupported(
+            "Le contenu est un document HTML complet. L'export DOCX ne prend en "
+            "charge que le format Markdown. Utilisez l'export HTML ou PDF pour ce contenu."
+        )
+
     doc = Document()
 
     # Parse primary color to RGB
@@ -277,6 +310,19 @@ def _add_inline_formatting(paragraph, text: str):
             run.font.size = Pt(9)
         else:
             paragraph.add_run(match.group(5))
+
+
+def _is_full_html_document(raw: str) -> bool:
+    """Detecte si ``raw`` est deja un document HTML complet.
+
+    Vrai uniquement si les premiers caracteres non blancs commencent par
+    ``<!doctype html`` ou ``<html`` (casse ignoree). On limite le slice de
+    tete pour ne pas casser sur un tres gros document.
+    """
+    if not raw:
+        return False
+    head = raw.lstrip()[:64].lower()
+    return head.startswith('<!doctype html') or head.startswith('<html')
 
 
 def _safe_filename(title: str, ext: str) -> str:
