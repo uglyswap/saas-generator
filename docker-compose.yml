@@ -12,7 +12,7 @@ services:
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-16384}
       - LLM_REQUEST_TIMEOUT=${LLM_REQUEST_TIMEOUT:-300}
-      - DATABASE_URL=postgresql://saas:saas@db:5432/saas_generator
+      - DATABASE_URL=postgresql://saas:${POSTGRES_PASSWORD:?Definissez POSTGRES_PASSWORD dans .env}@db:5432/saas_generator
       - FLASK_ENV=production
     volumes:
       - ./exports:/app/exports
@@ -26,7 +26,7 @@ services:
     image: postgres:15-alpine
     environment:
       - POSTGRES_USER=saas
-      - POSTGRES_PASSWORD=saas
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Definissez POSTGRES_PASSWORD dans .env}
       - POSTGRES_DB=saas_generator
     volumes:
       - postgres_data:/var/lib/postgresql/data

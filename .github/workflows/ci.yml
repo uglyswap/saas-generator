@@ -25,13 +25,29 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest-cov ruff bandit pip-audit
 
-    - name: Run tests
+    # Etapes qualite/securite introduites en mode informatif (continue-on-error) :
+    # elles remontent les problemes sans bloquer la CI, le temps de nettoyer
+    # l'existant. Retirer continue-on-error pour les rendre bloquantes une fois au vert.
+    - name: Lint (ruff)
+      continue-on-error: true
+      run: ruff check .
+
+    - name: Security scan (bandit)
+      continue-on-error: true
+      run: bandit -r app -ll
+
+    - name: Dependency audit (pip-audit)
+      continue-on-error: true
+      run: pip-audit
+
+    - name: Run tests with coverage
       env:
         FLASK_ENV: testing
         SECRET_KEY: ci-test-secret-key
       run: |
-        pytest tests/ -v --tb=short
+        pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
 
     - name: Check imports
       run: |

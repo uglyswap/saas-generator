@@ -4,6 +4,7 @@ __pycache__
 .pytest_cache
 .git
 .gitignore
+.github
 *.md
 .env
 .env.local
@@ -15,3 +16,12 @@ node_modules
 *.egg-info
 dist
 build
+# Environnements virtuels (ne jamais copier dans l'image)
+.venv
+venv
+ENV
+env
+# Code gele non utilise par le runtime (ancienne app mono-utilisateur)
+legacy
+# Tests : non necessaires a l'execution
+tests
